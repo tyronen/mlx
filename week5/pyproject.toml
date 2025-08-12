@@ -1,0 +1,30 @@
+[project]
+# For use on laptop only. Do not use on Computa; use requirements.txt
+name = "gg-clip-vit"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "datasets>=3.6.0",
+    "hf-transfer>=0.1.9",
+    "kagglehub>=0.3.12",
+    "pillow>=11.2.1",
+    "tqdm>=4.67.1",
+    "transformers>=4.53.0",
+    "wandb>=0.20.1",
+    "black>=25.1.0",
+    "matplotlib>=3.10.3",
+    "notebook>=7.4.3",
+    "streamlit>=1.46.0",
+    "torch>=2.6.0",
+    "torchvision>=0.22.0",
+    "jpeg4py>=0.1.4",
+    "kaggle>=1.7.4.5",
+    "retry>=0.9.2",
+    "httpx[http2]>=0.28.1",
+    "pandas>=2.3.0",
+    "tensorflow>=2.19.0",
+    "tensorflow-datasets>=4.9.9",
+    "fiftyone>=1.7.0",
+]
