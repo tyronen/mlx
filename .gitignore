@@ -1,4 +1,20 @@
 # Byte-compiled / optimized / DLL files
+.idea/
+data/
+wandb/
+runs/
+precomputed_npz/
+skipgram_models/
+title_regression_model/
+embeddings/
+models/
+
+*.orig
+*.rej
+
+*.pth
+*.csv
+
 __pycache__/
 *.py[codz]
 *$py.class
