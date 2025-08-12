@@ -1,0 +1,6 @@
+numpy==2.2.5
+pillow==11.2.1
+psycopg2-binary==2.9.10
+sqlalchemy==2.0.41
+streamlit==1.45.1
+streamlit-drawable-canvas==0.9.3
