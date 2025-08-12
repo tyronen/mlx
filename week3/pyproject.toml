@@ -1,0 +1,22 @@
+[project]
+name = "hh-mnist"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  # DO NOT PUT torch or anything depending on numpy here!
+  # That would overwrite Computa's versions
+  "tqdm>=4.67.1",
+  "wandb>=0.20.1",
+]
+
+[dependency-groups]
+inference = [
+    "matplotlib>=3.10.3",
+    "notebook>=7.4.3",
+    "streamlit>=1.46.0",
+    "streamlit-drawable-canvas>=0.9.3",
+    "torch>=2.6.0",
+    "torchvision>=0.22.0",
+]
