@@ -1,0 +1,13 @@
+datasets
+fastapi
+numpy
+pandas
+pyarrow
+redis
+requests
+streamlit
+tqdm
+torch>=2.2
+transformers
+uvicorn
+wandb
