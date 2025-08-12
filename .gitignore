@@ -10,9 +10,8 @@ embeddings/
 models/
 sweeps/
 logs/
-
+chunks/
 node_modules/
-dist/
 
 *.orig
 *.rej
