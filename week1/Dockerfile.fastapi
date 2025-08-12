@@ -1,0 +1,29 @@
+# Use an official Python runtime as a parent image
+FROM python:3.11-slim
+
+# Set the working directory in the container
+WORKDIR /code
+
+# Copy the production requirements file into the container at /code
+COPY ./requirements.prod.txt /code/requirements.prod.txt
+
+# Install production dependencies (CPU-only PyTorch, minimal set)
+RUN pip install --no-cache-dir --upgrade -r /code/requirements.prod.txt
+
+# Create necessary directories
+RUN mkdir -p /code/data /code/skipgram_models
+
+# Copy necessary files
+COPY ./app /code/app
+COPY ./utils /code/utils
+COPY ./big_model /code/big_model
+COPY ./data/train_vocab.json /code/data/
+COPY ./skipgram_models/silvery200.pt /code/skipgram_models/
+COPY ./models /code/models
+
+# Expose port 8000 to allow communication to/from server
+EXPOSE 8000
+
+# Command to run the uvicorn server
+# The host 0.0.0.0 makes the server accessible from outside the container
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

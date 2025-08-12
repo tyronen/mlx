@@ -1,0 +1,6 @@
+# Streamlit frontend production dependencies
+streamlit>=1.28.0
+requests>=2.31.0
+
+# Optional: if you want to pin specific versions for stability
+# pandas>=1.5.0  # only if streamlit app uses pandas directly 
