@@ -1,0 +1,30 @@
+[project]
+# For use on laptop only. Do not use on Computa; use requirements.txt
+name = "rr-audio-tyrone"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "black>=25.1.0",
+    "datasets>=3.6.0",
+    "fastapi[standard]>=0.116.0",
+    "hf-transfer>=0.1.9",
+    "insanely-fast-whisper>=0.0.15",
+    "librosa>=0.11.0",
+    "matplotlib>=3.10.3",
+    "notebook>=7.4.3",
+    "numpy>=2.2.6",
+    "onnxruntime-silicon>=1.16.3",
+    "openai-whisper>=20250625",
+    "python-levenshtein>=0.27.1",
+    "python-multipart>=0.0.20",
+    "rapidfuzz>=3.13.0",
+    "soundfile>=0.13.1",
+    "torch>=2.6.0",
+    "torchaudio>=2.6.0",
+    "torchvision>=0.22.0",
+    "tqdm>=4.67.1",
+    "transformers>=4.53.0",
+    "wandb>=0.20.1",
+]
