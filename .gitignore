@@ -8,6 +8,11 @@ skipgram_models/
 title_regression_model/
 embeddings/
 models/
+sweeps/
+logs/
+
+node_modules/
+dist/
 
 *.orig
 *.rej
