@@ -7,7 +7,6 @@ precomputed_npz/
 skipgram_models/
 title_regression_model/
 embeddings/
-models/
 sweeps/
 logs/
 chunks/
@@ -21,6 +20,7 @@ node_modules/
 
 *.pth
 *.csv
+.tmux.conf
 
 __pycache__/
 *.py[codz]

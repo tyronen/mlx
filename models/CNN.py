@@ -1,8 +1,7 @@
 from torch import nn
 
-MODEL_PATH="mnist_model.pth"
-
-class MnistCNN(nn.Module):
+""" Week 0 model: CNN for MNIST dataset."""
+class CNN(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)

@@ -2,11 +2,16 @@ import torch
 from torch import nn
 from torch import optim
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
-from torchvision.transforms import ToTensor
+from torchvision import datasets
+from torchvision.transforms import v2
+import numpy as np
+import random
+from common import utils
+import logging
+from models import CNN
+from . import arguments
 
-from models import MnistCNN, MODEL_PATH
-
+args = arguments.get_args("Mnist CNN")
 
 def train(dataloader, model, loss_fn, optimizer, device):
     size = len(dataloader.dataset)
@@ -21,7 +26,7 @@ def train(dataloader, model, loss_fn, optimizer, device):
 
         if batch % 100 == 0:
             loss, current = loss.item(), (batch + 1) * len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+            logging.info(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
 
 
 def test(dataloader, model, loss_fn, device):
@@ -37,25 +42,28 @@ def test(dataloader, model, loss_fn, device):
             correct += (pred.argmax(1) == y).type(torch.float).sum().item()
     test_loss /= num_batches
     correct /= size
-    print(
+    logging.info(
         f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n"
     )
 
 
 def main():
-    print("Downloading MNIST dataset...")
-    raw_data = datasets.MNIST(
-        root="data", train=True, download=True, transform=ToTensor()
-    )
-    stats_dataloader = DataLoader(
-        raw_data, batch_size=len(raw_data.data), shuffle=False
-    )
-    images, _ = next(iter(stats_dataloader))
-    mean = images.mean()
-    std = images.std()
+    utils.setup_logging()
+    logging.info("Downloading MNIST dataset...")
 
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize(mean, std)]
+    # Set random seed for reproducibility
+    torch.manual_seed(42)
+    random.seed(42)
+    np.random.seed(42)
+
+    # Load original MNIST data
+    transform = v2.Compose(
+        [
+            v2.ToImage(),
+            v2.ToDtype(torch.float32, scale=True),
+            # add mouse-like behaviour
+            v2.RandomAffine(degrees=10, translate=(0.1, 0.1)),
+        ]
     )
 
     training_data = datasets.MNIST(
@@ -68,13 +76,9 @@ def main():
     train_dataloader = DataLoader(training_data, batch_size=64, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=64, shuffle=False)
 
-    device = (
-        torch.accelerator.current_accelerator().type
-        if torch.accelerator.is_available()
-        else "cpu"
-    )
-    print(f"Using {device} device")
-    model = MnistCNN()
+    device = utils.get_device()
+    logging.info(f"Using {device} device")
+    model = CNN.CNN()
     model.to(device)
 
     loss_fn = nn.CrossEntropyLoss()
@@ -82,17 +86,12 @@ def main():
 
     epochs = 5
     for t in range(epochs):
-        print(f"Epoch {t+1}\n-------------------------------")
+        logging.info(f"Epoch {t+1}\n-------------------------------")
         train(train_dataloader, model, loss_fn, optimizer, device)
         test(test_dataloader, model, loss_fn, device)
 
-    model_dict = {
-        "model_state_dict": model.state_dict(),
-        "mean": mean,
-        "std": std,
-    }
-    torch.save(model_dict, MODEL_PATH)
-    print(f"Saved PyTorch Model State to {MODEL_PATH}")
+    torch.save(model.state_dict(), args.model_path)
+    logging.info(f"Saved PyTorch Model State to {args.model_path}")
 
 
 if __name__ == "__main__":
