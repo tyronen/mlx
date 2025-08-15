@@ -7,7 +7,7 @@ set -a; source .env; set +a
 
 mkdir -p data
 
-source $HOME/.local/bin/env
+source .env
 if [[ -n "$SSH_CONNECTION" && -d /workspace ]]; then
   echo "🐧 Running on remote runpod with storage attached - setting custom hf cache dir"
   set -a

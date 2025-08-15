@@ -1,22 +1,24 @@
+import logging
+import os
+
 import torch
 from torch import nn
 from torch import optim
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision.transforms import v2
-import numpy as np
-import random
-from common import utils
-import logging
+from tqdm import tqdm
+
+from common import utils, arguments
 from models import CNN
-from . import arguments
 
 args = arguments.get_args("Mnist CNN")
+
 
 def train(dataloader, model, loss_fn, optimizer, device):
     size = len(dataloader.dataset)
     model.train()
-    for batch, (X, y) in enumerate(dataloader):
+    for batch, (X, y) in tqdm(enumerate(dataloader)):
         X, y = X.to(device), y.to(device)
         pred = model(X)
         loss = loss_fn(pred, y)
@@ -35,7 +37,7 @@ def test(dataloader, model, loss_fn, device):
     model.eval()
     test_loss, correct = 0, 0
     with torch.no_grad():
-        for X, y in dataloader:
+        for X, y in tqdm(dataloader):
             X, y = X.to(device), y.to(device)
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
@@ -51,10 +53,7 @@ def main():
     utils.setup_logging()
     logging.info("Downloading MNIST dataset...")
 
-    # Set random seed for reproducibility
-    torch.manual_seed(42)
-    random.seed(42)
-    np.random.seed(42)
+    utils.randomize()
 
     # Load original MNIST data
     transform = v2.Compose(
@@ -66,12 +65,13 @@ def main():
         ]
     )
 
-    training_data = datasets.MNIST(
-        root="data", train=True, download=True, transform=transform
+    root = os.environ.get("HF_DATASETS_CACHE")
+    training_data = tqdm(
+        datasets.MNIST(root=root, train=True, download=True, transform=transform)
     )
 
-    test_data = datasets.MNIST(
-        root="data", train=False, download=True, transform=transform
+    test_data = tqdm(
+        datasets.MNIST(root=root, train=False, download=True, transform=transform)
     )
     train_dataloader = DataLoader(training_data, batch_size=64, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=64, shuffle=False)
@@ -84,14 +84,14 @@ def main():
     loss_fn = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    epochs = 5
+    epochs = args.epochs
     for t in range(epochs):
         logging.info(f"Epoch {t+1}\n-------------------------------")
         train(train_dataloader, model, loss_fn, optimizer, device)
         test(test_dataloader, model, loss_fn, device)
 
     torch.save(model.state_dict(), args.model_path)
-    logging.info(f"Saved PyTorch Model State to {args.model_path}")
+    logging.info(f"Saved PyTorch model state to {args.model_path}")
 
 
 if __name__ == "__main__":

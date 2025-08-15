@@ -1,22 +1,42 @@
 #!/usr/bin/env bash
 # run like `./send.sh` on local, to prepare remote to continue setup
-# set up your ~/.ssh/config file to have an entry for 'mlx' to your remote server
 
-# like this:
 
-# Host mlx
-#  HostName <ip address>
-#  IdentityFile ~/.ssh/<your saved private key file>
-#  Port <port>
-#  User root
+PORTS=$(runpodctl get pod -a | tail -n 1 | awk '{print $14}')
+SSH_LINE=$(echo "$PORTS" | tr ',' '\n' | fgrep "pub")
+IP_ADDR=$(echo $SSH_LINE | cut -d: -f1)
+PORT=$(echo $SSH_LINE | cut -d: -f2 | cut -d- -f1)
+REMOTE="mlx"
 
-if [[ -z "${1-}" ]]; then
-    REMOTE="mlx"
-else
-    REMOTE="$1"
-fi
+# Remove old mlx entry
+awk -v host="$REMOTE" '
+BEGIN { in_block = 0 }
+/^Host / {
+    if (in_block && $2 != host) {
+        in_block = 0
+        print
+    } else if ($2 == host) {
+        in_block = 1
+    } else {
+        print
+    }
+    next
+}
+/^[[:space:]]/ && in_block { next }
+/^$/ && in_block { next }
+!in_block { print }
+' ~/.ssh/config > ~/.ssh/config.tmp && mv ~/.ssh/config.tmp ~/.ssh/config
 
-# move ssh.sh script and .env file to remote
+# Add new entry
+cat >> ~/.ssh/config << EOF
+Host $REMOTE
+    HostName $IP_ADDR
+    IdentityFile ~/.ssh/id_ed25519
+    Port $PORT
+    User root
+
+EOF
+
 scp ssh.sh "$REMOTE:ssh.sh"
 scp .env "$REMOTE:.env"
 scp .tmux.conf "$REMOTE:.tmux.conf"

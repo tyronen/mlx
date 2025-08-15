@@ -2,6 +2,14 @@ import logging
 from contextlib import nullcontext
 import torch
 from torch.amp import autocast, GradScaler
+import numpy as np
+import random
+
+def randomize():
+    # Set random seed for reproducibility
+    torch.manual_seed(42)
+    random.seed(42)
+    np.random.seed(42)
 
 def setup_logging():
     logging.basicConfig(
