@@ -7,7 +7,7 @@ from PIL import Image, ImageOps
 from torchvision import transforms
 
 from common import arguments
-from db import log_prediction
+from db import log_prediction, setup_database
 from models import CNN
 
 TEMPERATURE = 2.0
@@ -18,13 +18,22 @@ MODEL = None
 
 args = arguments.get_args("CNN API server")
 
+_DB_READY = False
+
+
+def _ensure_db():
+    global _DB_READY
+    if not _DB_READY:
+        setup_database()
+        _DB_READY = True
+
 
 def load_model_once():
     global MODEL
     if MODEL is None:
         model = CNN.CNN()
-        state = torch.load(args.model_path, map_location=torch.device("cpu"))
-        model.load_state_dict(state["model_state_dict"])
+        state_dict = torch.load(args.model_path, map_location=torch.device("cpu"))
+        model.load_state_dict(state_dict)
         model.eval()
         MODEL = model
     return MODEL
@@ -89,6 +98,7 @@ def do_submit(payload: dict) -> dict:
         }
 
     try:
+        _ensure_db()
         log_prediction(pred, conf, true)
     except Exception as e:
         # If DB isn't configured for serverless, return an explicit error

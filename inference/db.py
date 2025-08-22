@@ -6,7 +6,13 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-_DATABASE_URL = os.environ.get("DATABASE_URL")
+
+def _build_url() -> str:
+    db_path = os.environ.get("SQLITE_PATH", "/workspace/preds.db")
+    return f"sqlite:///{db_path}?check_same_thread=false"
+
+
+_DATABASE_URL = _build_url()
 
 # ------- Engine / Connection helpers (non-Streamlit path) -------
 _ENGINE: Engine | None = None
@@ -36,11 +42,11 @@ def setup_database():
         conn.execute(
             text(
                 """CREATE TABLE IF NOT EXISTS predictions (
-                   id SERIAL PRIMARY KEY,
-                   timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                   prediction SMALLINT,
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                   prediction INTEGER,
                    confidence REAL,
-                   true_label SMALLINT
+                   true_label INTEGER
                )"""
             )
         )
@@ -66,7 +72,7 @@ def get_all_predictions(tz: str = "Europe/London"):
     Return a pandas DataFrame of recent predictions (UI convenience).
     """
 
-    sql = """SELECT timestamp AT TIME ZONE 'UTC' AS timestamp_utc,
+    sql = """SELECT datetime(timestamp) AS timestamp_utc,
                     prediction, confidence, true_label
              FROM predictions
              ORDER BY timestamp DESC"""
@@ -77,8 +83,9 @@ def get_all_predictions(tz: str = "Europe/London"):
         # Convert to desired timezone and prettify columns
         df["timestamp"] = (
             pd.to_datetime(df["timestamp_utc"], utc=True)
+            .dt.tz_localize("UTC")
             .dt.tz_convert(tz)
-            .dt.tz_localize(None)  # Streamlit tables look cleaner w/o tz suffix
+            .dt.tz_localize(None)
         )
         df = df.drop(columns=["timestamp_utc"])
         df = df.rename(
