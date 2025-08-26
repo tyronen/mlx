@@ -1,0 +1,10 @@
+  {
+    "input": {
+      "action": "submit",
+      "payload": {
+        "prediction": 7,
+        "confidence": 98.5,
+        "true_label": 7
+      }
+    }
+  }

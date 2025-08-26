@@ -126,6 +126,16 @@ def main():
         "⚙️ UI runs on CPU here; inference & logging happen on RunPod Serverless."
     )
 
+    # Always show all submissions
+    res_list = call_runpod("list", {})
+    if res_list.get("ok") and "rows" in res_list:
+        st.subheader("All Submissions")
+        st.dataframe(res_list["rows"])
+    elif not res_list.get("ok"):
+        st.error(
+            f"Failed to fetch submissions: {res_list.get('error', 'Unknown error')}"
+        )
+
 
 if __name__ == "__main__":
     main()

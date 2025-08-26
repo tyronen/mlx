@@ -16,4 +16,4 @@ COPY common/ /app/common/
 COPY models/ /app/models/
 COPY inference/ /app/inference/
 
-CMD ["python", "inference/serverless.py", "--model_path", "/app/data/mnist_cnn.pth"]
+CMD ["python", "-m", "inference.serverless", "--model_path", "/app/data/mnist_cnn.pth"]

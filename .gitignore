@@ -21,6 +21,7 @@ node_modules/
 *.pth
 *.csv
 .tmux.conf
+.env*
 
 __pycache__/
 *.py[codz]

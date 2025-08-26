@@ -83,7 +83,6 @@ def get_all_predictions(tz: str = "Europe/London"):
         # Convert to desired timezone and prettify columns
         df["timestamp"] = (
             pd.to_datetime(df["timestamp_utc"], utc=True)
-            .dt.tz_localize("UTC")
             .dt.tz_convert(tz)
             .dt.tz_localize(None)
         )

@@ -7,8 +7,8 @@ from PIL import Image, ImageOps
 from torchvision import transforms
 
 from common import arguments
-from db import log_prediction, setup_database
 from models import CNN
+from .db import log_prediction, setup_database, get_all_predictions
 
 TEMPERATURE = 2.0
 
@@ -106,10 +106,20 @@ def do_submit(payload: dict) -> dict:
     return {"ok": True, "data": {"logged": True}}
 
 
+def do_list(payload: dict) -> dict:
+    try:
+        _ensure_db()
+        rows = get_all_predictions()
+        return {"ok": True, "data": rows}
+    except Exception as e:
+        return {"ok": False, "error": f"failed to list predictions: {e}"}
+
+
 # --- Router & handler ---
 ACTIONS = {
     "predict": do_predict,
     "submit": do_submit,
+    "list": do_list,
 }
 
 
@@ -118,7 +128,7 @@ def handler(event):
     Expected input:
     {
       "input": {
-        "action": "predict" | "submit",
+        "action": "predict" | "submit" | "list",
         "payload": { ... }   # per action
       }
     }
