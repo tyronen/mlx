@@ -1,6 +1,7 @@
 import base64
 import io
 
+import pandas as pd
 import runpod
 import torch
 from PIL import Image, ImageOps
@@ -109,8 +110,26 @@ def do_submit(payload: dict) -> dict:
 def do_list(payload: dict) -> dict:
     try:
         _ensure_db()
-        rows = get_all_predictions()
-        return {"ok": True, "data": rows}
+
+        df = get_all_predictions()  # returns a DataFrame
+        if df is None or df.empty:
+            rows = []
+        else:
+            # make sure timestamps are JSON-serializable
+            if "Timestamp" in df.columns:
+                df["Timestamp"] = pd.to_datetime(df["Timestamp"]).dt.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            # take first N and convert to list[dict]
+            rows = df.head(50).to_dict(orient="records")
+
+            # avoid numpy types that can trip some JSON encoders
+            for r in rows:
+                for k, v in list(r.items()):
+                    if hasattr(v, "item"):  # numpy scalar -> python scalar
+                        r[k] = v.item()
+
+        return {"ok": True, "rows": rows}
     except Exception as e:
         return {"ok": False, "error": f"failed to list predictions: {e}"}
 

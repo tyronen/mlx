@@ -19,20 +19,7 @@ Build inference:
 docker build --platform linux/amd64 -t docker.io/$DOCKER_USERNAME/inference:v$VERSION -f inference/Dockerfile .
 ```
 
-To run inference locally:
-```
-docker run --rm -it \
-  --platform linux/amd64 \
-  -v "$(PWD)/inference/test_predict.json:/app/test_input.json:ro" \
-  -e SQLITE_PATH=/app/preds.db \
-  $DOCKER_USERNAME/inference:v$VERSION
-```
-
-You can use any of the files `test_predict`, `test_submit`, or `test_list`.
-
-```
-python -m inference.serverless --model_path data/mnist_cnn.pth
-```
+To run inference locally, `test_inference.sh`.
 
 Deploy to serverless as follows (from laptop):
 
