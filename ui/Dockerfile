@@ -10,5 +10,5 @@ COPY ui/requirements.txt .
 RUN pip install --prefer-binary -r requirements.txt
 
 COPY ui/ /app/
-EXPOSE 80
+EXPOSE $PORT
 CMD sh -c "streamlit run webserver.py --server.port=${PORT:-80} --server.address=0.0.0.0"
