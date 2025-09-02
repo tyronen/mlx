@@ -7,7 +7,7 @@ import torch
 from PIL import Image, ImageOps
 from torchvision import transforms
 
-from common import arguments
+from common import arguments, utils
 from models import CNN
 from .db import log_prediction, setup_database, get_all_predictions
 
@@ -168,4 +168,5 @@ def handler(event):
         return {"ok": False, "error": f"unhandled server error: {e}"}
 
 
+utils.setup_logging()
 runpod.serverless.start({"handler": handler})

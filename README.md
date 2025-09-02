@@ -46,18 +46,21 @@ RUNPOD_ENDPOINT="https://api.runpod.ai/v2/<runpod-serverless-endpoint-id>/runsyn
 
 ```
 docker build --platform linux/amd64,linux/arm64 -t docker.io/$DOCKER_USERNAME/ui:latest -f ui/Dockerfile .
-docker push docker.io/$DOCKER_USERNAME/ui:latest
+```
+
+4. Debug locally. You need to override the port. Copy `.env.prod` to `.env.dev` and add the line `PORT=8000`. Then:
+
+```
+docker run -it --rm -p 8000:8000 --env-file .env.dev $DOCKER_USERNAME/ui:latest
 ```
 
 4. Start on your server:
 
 ```
+# dev machine
+docker push docker.io/$DOCKER_USERNAME/ui:latest
+# server
 docker rm -f ui 
 docker run -d --name ui -p 80:80 --env-file ~/.env.prod --restart unless-stopped docker.io/$DOCKER_USERNAME/ui:latest 
 ```
 
-For local debugging you can override the port. Copy `.env.prod` to `.env.dev` and add the line `PORT=8000`. Then:
-
-```
-docker run -it --rm -p 8000:8000 --env-file ~/.env.dev $DOCKER_USERNAME/ui:latest
-```

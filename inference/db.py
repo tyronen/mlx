@@ -21,6 +21,7 @@ _ENGINE: Engine | None = None
 def _get_engine() -> Engine:
     global _ENGINE
     if _ENGINE is None:
+        logging.info(f"Database url {_DATABASE_URL}")
         _ENGINE = create_engine(_DATABASE_URL, pool_pre_ping=True)
     return _ENGINE
 
