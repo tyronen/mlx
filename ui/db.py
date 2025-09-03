@@ -8,7 +8,7 @@ from sqlalchemy.engine import Engine
 
 
 def _build_url() -> str:
-    db_path = os.environ.get("SQLITE_PATH", "/workspace/preds.db")
+    db_path = os.environ.get("SQLITE_PATH", "data/preds.db")
     return f"sqlite:///{db_path}?check_same_thread=false"
 
 
