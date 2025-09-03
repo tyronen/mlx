@@ -9,4 +9,5 @@ docker run \
     -p 80:80 \
     --env-file ~/.env.prod \
     --restart unless-stopped \
+    --pull=always \
     docker.io/tyronen24/ui:latest

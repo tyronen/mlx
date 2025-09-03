@@ -16,5 +16,5 @@ if [[ "$1" == "inference" ]]; then
 fi
 
 if [[ "$1" == "ui" ]]; then
-  docker build --platform linux/amd64,linux/arm64 -t docker.io/$DOCKER_USERNAME/ui:latest -f ui/Dockerfile .
+  docker buildx build --platform linux/amd64,linux/arm64 -t docker.io/$DOCKER_USERNAME/ui:latest -f ui/Dockerfile --push .
 fi
