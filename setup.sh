@@ -43,7 +43,7 @@ getversion torch
 getversion numpy
 getversion torchvision
 
-echo "🎉 Success! 'constraints.txt' has been created."
+echo "🎉 Success! 'training/constraints.txt' has been created."
 pip uninstall flash-attn flash_attn -y
 
 # cd /workspace/flash-attention

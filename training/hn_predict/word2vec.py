@@ -5,6 +5,7 @@ import time
 from collections import Counter
 from typing import Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,7 +21,7 @@ hyperparameters = {
     "context_size": 2,
     "embed_dim": 300,
     "epochs": 5,
-    "learning_rate": 0.01,
+    "learning_rate": 3e-3,
     "patience": 10000,
     "batch_size": 2048,
 }
@@ -73,12 +74,12 @@ def make_skipgram_dataset(indices):
 
 
 # Add this to reduce very common words like "the", "and"
-def subsample_frequent_words(indices, word_counts, threshold=1e-3):
+def subsample_frequent_words(indices, word_counts, threshold):
     total_words = sum(word_counts.values())
     subsampled = []
     for word_idx in indices:
         word_freq = word_counts[word_idx] / total_words
-        prob = (threshold / word_freq) ** 0.5
+        prob = min(1.0, (threshold / word_freq) ** 0.5 + threshold / word_freq)
         if random.random() < prob:
             subsampled.append(word_idx)
     return subsampled
@@ -116,11 +117,8 @@ class SkipGramNegativeSampling(nn.Module):
         return -(pos_loss + neg_loss).mean()
 
 
-def get_negative_samples(target_batch, vocab_size, num_negative=10):
-    samp_batch_size = target_batch.size(0)
-    return torch.randint(
-        0, vocab_size, (samp_batch_size, num_negative), device=target_batch.device
-    )
+def get_negative_samples(probs, bs, k):
+    return torch.multinomial(probs, num_samples=bs * k, replacement=True).view(bs, k)
 
 
 def main():
@@ -129,7 +127,7 @@ def main():
 
     run = wandb.init(
         # Set the wandb entity where your project will be logged (generally your team name).
-        entity="mlx-institute",
+        entity="tyronenicholas",
         # Set the wandb project where this run will be logged.
         project="Word2Vec",
         # Track hyperparameters and run metadata.
@@ -154,10 +152,17 @@ def main():
     # === Convert text to indices ===
     indices = [word_to_ix[word] for word in text if word in word_to_ix]
     index_counts = Counter(indices)
-    indices = subsample_frequent_words(indices, index_counts, threshold=1e-3)
+    indices = subsample_frequent_words(indices, index_counts, threshold=1e-4)
     logging.info(
         f"After subsampling: {len(indices)} tokens (was {len([word_to_ix[word] for word in text if word in word_to_ix])})"
     )
+
+    # Create unigram 0.75 negatives
+    counts = np.zeros(vocab_size, dtype=np.float64)
+    for idx, c in index_counts.items():
+        counts[idx] = c
+    probs = torch.tensor(counts**0.75, dtype=torch.float)
+    probs = (probs / probs.sum()).to(device)
 
     dataset = make_skipgram_dataset(indices)
     word2vec_dataset = SkipGramDataset(dataset)
@@ -195,9 +200,7 @@ def main():
         for i, (center_batch, context_batch) in pbar:
             center_batch = center_batch.to(device, non_blocking=True)
             context_batch = context_batch.to(device, non_blocking=True)
-            neg_samples = get_negative_samples(
-                center_batch, vocab_size, num_negative=10
-            )
+            neg_samples = get_negative_samples(probs, center_batch.size(0), 10)
 
             optimizer.zero_grad()
             if device.type == "mps":
@@ -219,6 +222,7 @@ def main():
                 scaler.update()
 
             total_samples += len(center_batch)
+            epoch_loss += loss.item() * center_batch.size(0)
             if i % 100 == 0:
                 run.log(
                     {

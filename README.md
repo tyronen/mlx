@@ -15,7 +15,17 @@ python -m training.train_mnist_cnn --model_path data/mnist_cnn.pth
 
 ## Week 1 - Hacker News Predictor
 
+`tokenizer.py` will tokenize comments and titles into `hn_corpus.txt`.
 
+`process_items.py` takes the large file downloaded (`items.parquet`) and backfills a lot of user data - at post time! into it and creates a new file, `posts.parquet`.
+
+To run the word2vec code, run `python -m training.hn_predict.word2vec` from the command line.
+
+We can evaluate models side by side with `python -m training.hn_predict.word2vec_eval model1 model2`
+
+`python training/hn_predict/mp_preprocess_data.py` takes the input data (`posts.parquet`) and preprocesses it into large tensor files in both training and test sets.
+
+Then you can run `python training/hn_predict/train_hurden_model.py` to actually train the model.
 
 ## UX server
 

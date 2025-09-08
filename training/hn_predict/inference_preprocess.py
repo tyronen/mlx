@@ -1,7 +1,8 @@
 import logging
-import pandas as pd
 import os
 import pickle
+
+import pandas as pd
 
 from models.hn_predict import CACHE_FILE
 
@@ -10,6 +11,8 @@ logging.basicConfig(
 )
 
 DROP_COLS = ["id", "score"]
+
+
 def save_user_data():
     """
     Return (columns, user_features, global_Tmin, global_Tmax).
@@ -39,6 +42,7 @@ def save_user_data():
     with open(CACHE_FILE, "wb") as fh:
         pickle.dump(cache, fh)
     logging.info(f"Saved inference cache to {CACHE_FILE}")
+
 
 if __name__ == "__main__":
     # Build or refresh the cache on demand

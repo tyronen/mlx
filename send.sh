@@ -2,7 +2,7 @@
 # run like `./send.sh` on local, to prepare remote to continue setup
 
 
-PORTS=$(runpodctl get pod -a | tail -n 1 | awk '{print $14}')
+PORTS=$(runpodctl get pod -a | tail -n 1 | awk -F\t '{print $12}')
 SSH_LINE=$(echo "$PORTS" | tr ',' '\n' | fgrep "pub")
 IP_ADDR=$(echo $SSH_LINE | cut -d: -f1)
 PORT=$(echo $SSH_LINE | cut -d: -f2 | cut -d- -f1)

@@ -1,27 +1,29 @@
-import os
-import streamlit as st
-import requests
 import datetime
+import os
+
+import requests
+import streamlit as st
+
 # Import the new helper functions
-from utils.hn_api import get_item, fetch_random_recent_story
+from .hn_predict_api import get_item, fetch_random_recent_story
 
 # --- Configuration ---
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://127.0.0.1:8000")
 
 # --- Initialize Session State ---
-if 'id' not in st.session_state:
+if "id" not in st.session_state:
     st.session_state.id = 40646061
-if 'by' not in st.session_state:
+if "by" not in st.session_state:
     st.session_state.by = "testuser"
-if 'title' not in st.session_state:
+if "title" not in st.session_state:
     st.session_state.title = "My awesome new project"
-if 'url' not in st.session_state:
+if "url" not in st.session_state:
     st.session_state.url = "http://example.com"
-if 'time_obj' not in st.session_state:
+if "time_obj" not in st.session_state:
     st.session_state.time_obj = datetime.datetime.now()
-if 'score' not in st.session_state:
+if "score" not in st.session_state:
     st.session_state.score = None
-if 'comments' not in st.session_state:
+if "comments" not in st.session_state:
     st.session_state.comments = None
 
 # --- Streamlit UI ---
@@ -36,7 +38,13 @@ st.write("Enter an ID or fetch a random recent post to populate the fields below
 st.subheader("Fetch by ID")
 col1, col2 = st.columns([3, 2])
 with col1:
-    item_id_input = st.number_input("Hacker News Post ID", min_value=1, value=st.session_state['id'], step=1, label_visibility="collapsed")
+    item_id_input = st.number_input(
+        "Hacker News Post ID",
+        min_value=1,
+        value=st.session_state["id"],
+        step=1,
+        label_visibility="collapsed",
+    )
 with col2:
     if st.button("Fetch and Populate"):
         with st.spinner(f"Fetching data for item {item_id_input}..."):
@@ -45,10 +53,14 @@ with col2:
                 st.session_state.by = item_data.get("by", "")
                 st.session_state.title = item_data.get("title", "")
                 st.session_state.url = item_data.get("url", "")
-                st.session_state.time_obj = datetime.datetime.fromtimestamp(item_data.get("time", 0))
+                st.session_state.time_obj = datetime.datetime.fromtimestamp(
+                    item_data.get("time", 0)
+                )
                 st.session_state.score = item_data.get("score", 0)
                 st.session_state.comments = item_data.get("descendants", 0)
-                st.success(f"Successfully populated form with data for ID {item_id_input}.")
+                st.success(
+                    f"Successfully populated form with data for ID {item_id_input}."
+                )
             else:
                 st.warning(f"Item {item_id_input} is not a story or was not found.")
                 st.session_state.score, st.session_state.comments = None, None
@@ -63,10 +75,14 @@ if st.button("Fetch and Populate Random"):
             st.session_state.by = item_data.get("by", "")
             st.session_state.title = item_data.get("title", "")
             st.session_state.url = item_data.get("url", "")
-            st.session_state.time_obj = datetime.datetime.fromtimestamp(item_data.get("time", 0))
+            st.session_state.time_obj = datetime.datetime.fromtimestamp(
+                item_data.get("time", 0)
+            )
             st.session_state.score = item_data.get("score", 0)
             st.session_state.comments = item_data.get("descendants", 0)
-            st.success(f"Successfully populated form with data for random post ID {item_data.get('id')}.")
+            st.success(
+                f"Successfully populated form with data for random post ID {item_data.get('id')}."
+            )
         else:
             st.error("Could not find a random recent story. Please try again.")
             st.session_state.score, st.session_state.comments = None, None
@@ -103,7 +119,7 @@ if st.button("Predict Score"):
         "by": by_input,
         "title": title_input,
         "url": url_input,
-        "time": time_stamp
+        "time": time_stamp,
     }
     try:
         with st.spinner("Getting prediction..."):
