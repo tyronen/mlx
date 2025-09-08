@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import pickle
 
-CACHE_FILE = "data/inference_cache.pkl"
+from models.hn_predict import CACHE_FILE
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"

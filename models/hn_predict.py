@@ -1,25 +1,35 @@
 import torch
 import torch.nn as nn
 
+DATASET_NAME = "OpenPipe/hacker-news"
+
 
 class ClassifierModel(nn.Module):
-    def __init__(self, 
-                 vector_size_num, 
-                 vector_size_title, 
-                 scale,
-                 domain_vocab_size, 
-                 tld_vocab_size, 
-                 user_vocab_size,
-                 domain_embedding_dim=8, 
-                 tld_embedding_dim=4,
-                 user_embedding_dim=8):
+    def __init__(
+        self,
+        vector_size_num,
+        vector_size_title,
+        scale,
+        domain_vocab_size,
+        tld_vocab_size,
+        user_vocab_size,
+        domain_embedding_dim=8,
+        tld_embedding_dim=4,
+        user_embedding_dim=8,
+    ):
         super().__init__()
 
         self.domain_embedding = nn.Embedding(domain_vocab_size, domain_embedding_dim)
         self.tld_embedding = nn.Embedding(tld_vocab_size, tld_embedding_dim)
         self.user_embedding = nn.Embedding(user_vocab_size, user_embedding_dim)
 
-        total_input_size = vector_size_num + vector_size_title + domain_embedding_dim + tld_embedding_dim + user_embedding_dim
+        total_input_size = (
+            vector_size_num
+            + vector_size_title
+            + domain_embedding_dim
+            + tld_embedding_dim
+            + user_embedding_dim
+        )
 
         self.linear1 = nn.Linear(total_input_size, scale * total_input_size)
         self.relu1 = nn.ReLU()
@@ -37,7 +47,9 @@ class ClassifierModel(nn.Module):
         tld_emb = self.tld_embedding(tld_idx)
         user_emb = self.user_embedding(user_idx)
 
-        full_input = torch.cat([features_num, title_emb, domain_emb, tld_emb, user_emb], dim=1)
+        full_input = torch.cat(
+            [features_num, title_emb, domain_emb, tld_emb, user_emb], dim=1
+        )
 
         x = self.dropout(full_input)
 
@@ -52,17 +64,15 @@ class ClassifierModel(nn.Module):
         return out  # shape: [batch_size, 1]
 
 
-
-
 # class RegressionModel(nn.Module):
-#     def __init__(self, 
-#                  vector_size_num, 
-#                  vector_size_title, 
+#     def __init__(self,
+#                  vector_size_num,
+#                  vector_size_title,
 #                  scale,
-#                  domain_vocab_size, 
-#                  tld_vocab_size, 
+#                  domain_vocab_size,
+#                  tld_vocab_size,
 #                  user_vocab_size,
-#                  domain_embedding_dim=8, 
+#                  domain_embedding_dim=8,
 #                  tld_embedding_dim=4,
 #                  user_embedding_dim=8):
 #         super().__init__()
@@ -102,19 +112,20 @@ class ClassifierModel(nn.Module):
 #         return out  # shape: [batch_size, num_quantiles]
 
 
-
 class QuantileRegressionModel(nn.Module):
-    def __init__(self, 
-                 vector_size_num, 
-                 vector_size_title, 
-                 scale,
-                 domain_vocab_size, 
-                 tld_vocab_size, 
-                 user_vocab_size,
-                 num_quantiles,
-                 domain_embedding_dim=8, 
-                 tld_embedding_dim=4,
-                 user_embedding_dim=8):
+    def __init__(
+        self,
+        vector_size_num,
+        vector_size_title,
+        scale,
+        domain_vocab_size,
+        tld_vocab_size,
+        user_vocab_size,
+        num_quantiles,
+        domain_embedding_dim=8,
+        tld_embedding_dim=4,
+        user_embedding_dim=8,
+    ):
         super().__init__()
 
         self.num_quantiles = num_quantiles
@@ -123,7 +134,13 @@ class QuantileRegressionModel(nn.Module):
         self.tld_embedding = nn.Embedding(tld_vocab_size, tld_embedding_dim)
         self.user_embedding = nn.Embedding(user_vocab_size, user_embedding_dim)
 
-        total_input_size = vector_size_num + vector_size_title + domain_embedding_dim + tld_embedding_dim + user_embedding_dim
+        total_input_size = (
+            vector_size_num
+            + vector_size_title
+            + domain_embedding_dim
+            + tld_embedding_dim
+            + user_embedding_dim
+        )
 
         self.linear1 = nn.Linear(total_input_size, scale * total_input_size)
         self.bn1 = nn.BatchNorm1d(scale * total_input_size)
@@ -141,7 +158,9 @@ class QuantileRegressionModel(nn.Module):
         tld_emb = self.tld_embedding(tld_idx)
         user_emb = self.user_embedding(user_idx)
 
-        full_input = torch.cat([features_num, title_emb, domain_emb, tld_emb, user_emb], dim=1)
+        full_input = torch.cat(
+            [features_num, title_emb, domain_emb, tld_emb, user_emb], dim=1
+        )
 
         x = self.dropout(full_input)
         x = self.linear1(x)
@@ -154,3 +173,6 @@ class QuantileRegressionModel(nn.Module):
 
         out = self.linear3(x)
         return out  # shape: [batch_size, num_quantiles]
+
+
+CACHE_FILE = "data/inference_cache.pkl"

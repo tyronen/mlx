@@ -13,21 +13,9 @@ pip install -r training/requirements.txt -c training/constraints.txt
 python -m training.train_mnist_cnn --model_path data/mnist_cnn.pth
 ```
 
-Build inference:
+## Week 1 - Hacker News Predictor
 
-```
-docker build --platform linux/amd64 -t docker.io/$DOCKER_USERNAME/inference:v$VERSION -f inference/Dockerfile .
-```
 
-To run inference locally, `test_inference.sh`.
-
-Deploy to serverless as follows (from laptop):
-
-```
-docker push $DOCKER_USERNAME/inference:v$VERSION
-```
-
-Create a serverless endpoint on RunPod using the Serverless console. Point it at `docker.io/$DOCKER_USERNAME/inference:v$VERSION`. You must update the version after each push.
 
 ## UX server
 
@@ -53,16 +41,13 @@ export ENV=./.env.dev
 
 ```
 ./build.sh ui
+scp ui_prod.sh <server>:ui_prod.sh
 ```
 
 
 5. Start on your server:
 
 ```
-# dev machine
-docker push docker.io/$DOCKER_USERNAME/ui:latest
-# server
-export ENV=~/.env.prod
 ./ui_prod.sh
 ```
 
