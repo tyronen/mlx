@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import math
 import os
 import random
 import time
@@ -16,14 +17,19 @@ from tqdm import tqdm
 
 from common import utils
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.set_float32_matmul_precision("high")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+
 hyperparameters = {
     "min_freq": 35,
     "context_size": 2,
-    "embed_dim": 300,
+    "embed_dim": 400,
     "epochs": 5,
     "learning_rate": 3e-3,
     "patience": 10000,
-    "batch_size": 2048,
+    "batch_size": 8192,
 }
 
 parser = argparse.ArgumentParser(
@@ -94,6 +100,8 @@ class SkipGramNegativeSampling(nn.Module):
 
         self.in_embed = nn.Embedding(vocab_size, embed_dim)
         self.out_embed = nn.Embedding(vocab_size, embed_dim)
+        nn.init.normal_(self.in_embed.weight, mean=0.0, std=0.01)
+        nn.init.normal_(self.out_embed.weight, mean=0.0, std=0.01)
 
     def forward(self, center_words, context_words, neg_samples):
         # Center word embeddings
@@ -166,11 +174,29 @@ def main():
     pin_memory = device.type == "cuda"
 
     model = SkipGramNegativeSampling(vocab_size).to(device)
+    model = torch.compile(model, mode="reduce-overhead")
+
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
     optimizer = optim.Adam(model.parameters(), lr=hyperparameters["learning_rate"])
+    steps_per_epoch = math.ceil(len(word2vec_dataset) / hyperparameters["batch_size"])
+    total_steps = steps_per_epoch * hyperparameters["epochs"]
 
-    num_workers = 8 if device.type == "cuda" else 0 if device.type == "mps" else 4
+    warmup_steps = max(
+        1000, total_steps // 50
+    )  # ~2% of training or 1k, whichever larger
+
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps
+        # linear decay down to 10% of base LR
+        remain = max(1, total_steps - warmup_steps)
+        frac = 1.0 - (step - warmup_steps) / remain
+        return max(0.10, frac)
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    _global_step = 0
+    num_workers = min(16, (os.cpu_count() or 8))
     data_loader = DataLoader(
         word2vec_dataset,
         batch_size=hyperparameters["batch_size"],
@@ -179,8 +205,10 @@ def main():
         pin_memory=pin_memory,
         num_workers=num_workers,
         persistent_workers=(num_workers > 0),
+        prefetch_factor=8,
+        multiprocessing_context="forkserver",
     )
-    scaler = torch.amp.GradScaler(device=device.type)
+    scaler = torch.amp.GradScaler(device=device.type, enabled=False)
 
     epochs = hyperparameters["epochs"]
     for epoch in range(epochs):
@@ -217,6 +245,8 @@ def main():
                 )
                 scaler.step(optimizer)
                 scaler.update()
+                _global_step += 1
+                scheduler.step()
 
             total_samples += len(center_batch)
             epoch_loss += loss.item() * center_batch.size(0)
@@ -225,6 +255,7 @@ def main():
                     {
                         "train_loss_batch": loss.item(),
                         "grad_norm": float(total_grad_norm),
+                        "learning_rate": scheduler.get_last_lr()[0],
                     }
                 )
             if i % 10 == 0:
