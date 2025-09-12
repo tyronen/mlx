@@ -12,8 +12,8 @@ if [[ -n "$SSH_CONNECTION" && -d /workspace ]]; then
   echo "🐧 Running on remote runpod with storage attached - setting custom hf cache dir"
   set -a
   export HF_HOME="/dev/shm/.cache"
-  export HF_DATASETS_CACHE="/dev/shm/.cache/datasets_cache"
-  export PIP_CACHE_DIR="/dev/shm/.cache/pip_cache"
+  export HF_DATASETS_CACHE="$HF_HOME/datasets_cache"
+  export PIP_CACHE_DIR="$HF_HOME/pip_cache"
   mkdir -p $HF_HOME
   mkdir -p $HF_DATASETS_CACHE
   mkdir -p $PIP_CACHE_DIR

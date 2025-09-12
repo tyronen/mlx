@@ -1,10 +1,10 @@
 import argparse
 import logging
 from collections import defaultdict
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 from datasets import load_dataset, concatenate_datasets
 
 from models import hn_predict
@@ -14,7 +14,11 @@ SECONDS_PER_YEAR = 365.25 * SECONDS_PER_DAY
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--posts", default="data/posts.parquet", help="Posts file")
-
+parser.add_argument(
+    "--titles",
+    default="data/hn_titles.txt.gz",
+    help="Where to write HN story titles (newline-delimited; .gz supported)",
+)
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
 )
@@ -25,7 +29,7 @@ def load_items_dataframe() -> pd.DataFrame:
     splits = [ds_dict[k] for k in ds_dict.keys()]
     ds = splits[0] if len(splits) == 1 else concatenate_datasets(splits)
     # Convert to Arrow table then DataFrame (fast, preserves types)
-    table: pa.Table = ds.to_arrow()
+    table = ds.data.table  # this is the underlying pyarrow.Table
     return table.to_pandas()
 
 
@@ -35,6 +39,18 @@ def mean(x):
 
 def percent(num, denom):
     return np.where(denom == 0, 0, 100.0 * num / denom)
+
+
+def write_titles_file(df: pd.DataFrame, out_path: str):
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    titles = df["title"].dropna()
+
+    out_df = pd.DataFrame({("title"): [t.strip() for t in titles]})
+    out_df.to_parquet(p, index=False)
+
+    logging.info(f"Wrote {len(titles):,} titles -> {p}")
 
 
 def comment_calculations(parent_map, comments, _story_ids_unused=None):
@@ -96,7 +112,7 @@ def expanding_shifted(stories_df, col, fn):
     )
 
 
-def main(items_file, posts_file):
+def main(posts_file):
     logging.info(f"Reading items")
     items = load_items_dataframe()
     logging.info(f"Sorting items")
@@ -107,6 +123,13 @@ def main(items_file, posts_file):
     parent_map = not_dead.set_index("id")["parent"].to_dict()
     logging.info("Filtering for stories")
     stories = not_dead[not_dead["type"] == "story"].set_index("id")
+    logging.info("Writing titles file for word2vec reuse")
+    write_titles_file(
+        df=stories.reset_index()[
+            ["id", "title"]
+        ],  # id kept for future-proofing if needed
+        out_path=args.titles,
+    )
     logging.info("Filtering for comments")
     comments = not_dead[not_dead["type"] == "comment"].copy()
     logging.info("Calculating comment length")
@@ -281,4 +304,4 @@ def main(items_file, posts_file):
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    main(args.items, args.posts)
+    main(args.posts)

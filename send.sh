@@ -3,9 +3,13 @@
 
 
 PORTS=$(runpodctl get pod -a | tail -n 1 | awk -F\t '{print $12}')
+echo $PORTS
 SSH_LINE=$(echo "$PORTS" | tr ',' '\n' | fgrep "pub")
+echo $SSH_LINE
 IP_ADDR=$(echo $SSH_LINE | cut -d: -f1)
+echo $IP_ADDR
 PORT=$(echo $SSH_LINE | cut -d: -f2 | cut -d- -f1)
+echo $PORT
 REMOTE="mlx"
 
 # Remove old mlx entry

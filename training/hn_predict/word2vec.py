@@ -1,9 +1,9 @@
 import argparse
+import json
 import logging
+import os
 import random
 import time
-from collections import Counter
-from typing import Tuple
 
 import numpy as np
 import torch
@@ -11,13 +11,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import wandb
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 
 from common import utils
 
 hyperparameters = {
-    "min_freq": 10,
+    "min_freq": 35,
     "context_size": 2,
     "embed_dim": 300,
     "epochs": 5,
@@ -30,54 +30,53 @@ parser = argparse.ArgumentParser(
     description="Train skipgram word2vec model with negative sampling."
 )
 parser.add_argument(
-    "--corpus", default="data/text8", help="Input text file for training"
-)
-parser.add_argument(
     "--model",
     default="data/word2vec_skipgram.pth",
     help="Output file to save embeddings",
 )
+parser.add_argument(
+    "--preproc_dir",
+    default="data",
+    help="Directory containing indices.int32.npy, counts.int64.npy, vocab.json",
+)
 args = parser.parse_args()
 
-input_file = args.corpus
 outfile = args.model
-utils.setup_logging()
 
 
-class SkipGramDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
+class SkipGramStream(IterableDataset):
+    def __init__(self, indices, context_size):
+        super().__init__()
+        self.indices = indices
+        self.context_size = context_size
+
+    def __iter__(self):
+        cs = self.context_size
+        idxs = self.indices
+        N = len(idxs)
+        for i in range(cs, N - cs):
+            center_word = int(idxs[i])
+            # Dynamic window - randomly choose smaller windows
+            dynamic_window = random.randint(1, cs)  # 1..context_size
+            for j in range(i - dynamic_window, i + dynamic_window + 1):
+                if j != i and 0 <= j < N:
+                    context_word = int(idxs[j])
+                    yield (center_word, context_word)
 
     def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx) -> Tuple[torch.Tensor, torch.Tensor]:
-        center, context = self.data[idx]  #
-        return torch.tensor(center, dtype=torch.long), torch.tensor(
-            context, dtype=torch.long
-        )
-
-
-# === Build dataset ===
-def make_skipgram_dataset(indices):
-    dataset = []
-    context_size = hyperparameters["context_size"]
-    for i in range(context_size, len(indices) - context_size):
-        center_word = indices[i]
-        # Dynamic window - randomly choose smaller windows
-        dynamic_window = random.randint(1, context_size)  # 1 or 2 instead of always 2
-        for j in range(i - dynamic_window, i + dynamic_window + 1):
-            if j != i and 0 <= j < len(indices):
-                context_word = indices[j]
-                dataset.append((center_word, context_word))
-    return dataset
+        cs = self.context_size
+        N = len(self.indices)
+        if N <= 2 * cs:
+            return 0
+        # expected number of (center, context) pairs with dynamic window 1..cs
+        return (N - 2 * cs) * (cs + 1)
 
 
 # Add this to reduce very common words like "the", "and"
 def subsample_frequent_words(indices, word_counts, threshold):
     total_words = sum(word_counts.values())
     subsampled = []
-    for word_idx in indices:
+    for word_idx in tqdm(indices, desc="Subsampling", unit="tok", ncols=100):
         word_freq = word_counts[word_idx] / total_words
         prob = min(1.0, (threshold / word_freq) ** 0.5 + threshold / word_freq)
         if random.random() < prob:
@@ -134,38 +133,36 @@ def main():
         config=hyperparameters,
     )
 
-    # === Load ===
-    with open(input_file, "r", encoding="utf-8") as f:
-        text = f.read().split()
-
     # === Build vocab ===
-    counter = Counter(text)
-    vocab = {
-        word for word, freq in counter.items() if freq >= hyperparameters["min_freq"]
-    }
-    word_to_ix = {word: i for i, word in enumerate(sorted(vocab))}
-    ix_to_word = {i: word for word, i in word_to_ix.items()}
-    vocab_size = len(word_to_ix)
-
-    logging.info(f"Vocab size: {vocab_size}")
-
-    # === Convert text to indices ===
-    indices = [word_to_ix[word] for word in text if word in word_to_ix]
-    index_counts = Counter(indices)
-    indices = subsample_frequent_words(indices, index_counts, threshold=1e-4)
-    logging.info(
-        f"After subsampling: {len(indices)} tokens (was {len([word_to_ix[word] for word in text if word in word_to_ix])})"
+    pre = args.preproc_dir
+    idx_path = os.path.join(pre, "indices.int32.npy")
+    counts_path = os.path.join(pre, "counts.int64.npy")
+    vocab_path = os.path.join(pre, "vocab.json")
+    assert (
+        os.path.exists(idx_path)
+        and os.path.exists(counts_path)
+        and os.path.exists(vocab_path)
     )
 
-    # Create unigram 0.75 negatives
-    counts = np.zeros(vocab_size, dtype=np.float64)
-    for idx, c in index_counts.items():
-        counts[idx] = c
-    probs = torch.tensor(counts**0.75, dtype=torch.float)
-    probs = (probs / probs.sum()).to(device)
+    indices = np.memmap(idx_path, dtype=np.int32, mode="r")
+    counts = np.load(counts_path)
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        word_to_ix = json.load(f)
+    ix_to_word = {int(v): k for k, v in word_to_ix.items()}  # for saving
 
-    dataset = make_skipgram_dataset(indices)
-    word2vec_dataset = SkipGramDataset(dataset)
+    vocab_size = len(word_to_ix)
+    logging.info(f"Vocab size: {vocab_size:,}  |  token stream: {len(indices):,}")
+
+    # Negatives distribution (unigram^0.75)
+    cnt = counts.astype(np.float64)
+    probs = torch.tensor(
+        (cnt**0.75) / (cnt**0.75).sum(), dtype=torch.float, device=device
+    )
+
+    word2vec_dataset = SkipGramStream(
+        indices=indices,
+        context_size=hyperparameters["context_size"],
+    )
     pin_memory = device.type == "cuda"
 
     model = SkipGramNegativeSampling(vocab_size).to(device)
@@ -177,7 +174,7 @@ def main():
     data_loader = DataLoader(
         word2vec_dataset,
         batch_size=hyperparameters["batch_size"],
-        shuffle=True,
+        shuffle=False,
         drop_last=True,
         pin_memory=pin_memory,
         num_workers=num_workers,
@@ -227,7 +224,7 @@ def main():
                 run.log(
                     {
                         "train_loss_batch": loss.item(),
-                        "grad_norm": total_grad_norm,
+                        "grad_norm": float(total_grad_norm),
                     }
                 )
             if i % 10 == 0:
@@ -246,12 +243,13 @@ def main():
                 "samples_per_sec": samples_per_sec,
             }
         )
+        E_in = model.in_embed.weight.data.cpu()
+        E_out = model.out_embed.weight.data.cpu()
+        E_avg = (E_in + E_out) / 2
+        E_avg = E_avg / (E_avg.norm(dim=1, keepdim=True) + 1e-9)
+
         torch.save(
-            {
-                "embeddings": model.in_embed.weight.data.cpu(),
-                "word_to_ix": word_to_ix,
-                "ix_to_word": ix_to_word,
-            },
+            {"embeddings": E_avg, "word_to_ix": word_to_ix, "ix_to_word": ix_to_word},
             outfile,
         )
     logging.info(f"✅ Embeddings saved to {outfile}")
