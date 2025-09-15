@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import logging
 import os
 import re
 
 import numpy as np
 from datasets import load_dataset
+
+from common import utils
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9.+#_]+")
 
@@ -24,6 +27,7 @@ def tokenize_title_batch(batch):
 
 
 def main():
+    utils.setup_logging()
     ap = argparse.ArgumentParser()
     ap.add_argument("--out_dir", default="data", help="Output directory")
     ap.add_argument("--min_freq", type=int, default=35)
@@ -56,7 +60,9 @@ def main():
 
     # counts for every token (unsorted to avoid extra work)
     vc = s.value_counts(sort=False)
-
+    logging.info(f"Vocab size at min_freq=5: {(vc >= 5).sum()}")
+    logging.info(f"Vocab size at min_freq=15: {(vc >= 15).sum()}")
+    logging.info(f"Vocab size at min_freq=35: {(vc >= 35).sum()}")
     # vocab and mapping
     vc_kept = vc[vc >= args.min_freq]
     # if you want sorted vocab for reproducibility, uncomment:
@@ -65,13 +71,16 @@ def main():
     word_to_ix = dict(zip(vocab, range(len(vocab))))
     ix_to_word = {i: w for i, w in enumerate(vocab)}
 
-    print(f"Vocab ≥{args.min_freq}: {len(vocab):,}")
+    logging.info(f"Vocab ≥{args.min_freq}: {len(vocab):,}")
 
     # 4) Pass 2: total kept tokens (vectorized)
     # Filter the flat Series to only vocab, map to ids, and measure length
     idx_series = s[s.isin(word_to_ix)].map(word_to_ix).astype("int32")
+    # Take every Nth token to maintain temporal distribution
+    step = len(idx_series) // 15_000_000
+    idx_series = idx_series.iloc[::step]
     total_kept = int(idx_series.shape[0])
-    print(f"Total kept tokens: {total_kept:,}")
+    logging.info(f"Total kept tokens: {total_kept:,}")
 
     # 5) Pass 3: write indices (memmap) and counts array (aligned to vocab)
     idx_path = os.path.join(args.out_dir, "indices.int32.npy")
@@ -94,11 +103,11 @@ def main():
     with open(ix2_path, "w", encoding="utf-8") as f:
         json.dump(ix_to_word, f, ensure_ascii=False)
 
-    print("✅ Wrote:")
-    print("  ", idx_path)
-    print("  ", counts_path)
-    print("  ", vocab_path)
-    print("  ", ix2_path)
+    logging.info("✅ Wrote:")
+    logging.info(idx_path)
+    logging.info(counts_path)
+    logging.info(vocab_path)
+    logging.info(ix2_path)
 
 
 if __name__ == "__main__":

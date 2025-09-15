@@ -9,7 +9,7 @@ import tldextract
 import torch
 from tqdm import tqdm
 
-from helpers import load_embeddings, log_transform_plus1, time_transform
+from .helpers import load_embeddings, log_transform_plus1, time_transform
 
 # global variables to be shared across workers
 global_embedding_matrix = None
@@ -196,7 +196,7 @@ def precompute_parallel(
 
 
 if __name__ == "__main__":
-    EMBEDDING_FILE = "skipgram_models/silvery200.pt"
+    EMBEDDING_FILE = "data/word2vec_skipgram.pth"
     TRAINING_VOCAB_PATH = "data/train_vocab.json"
     FILEPATH = "data/posts.parquet"
     OUTPUT_DIR = "data"

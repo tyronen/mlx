@@ -4,4 +4,5 @@ pillow==11.2.1
 tldextract==5.3.0
 torchinfo==1.8.0
 tqdm==4.67.1
+transformers==4.56.1
 wandb==0.21.3
