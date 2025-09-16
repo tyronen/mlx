@@ -26,7 +26,7 @@ hyperparameters = {
     "min_freq": 35,
     "context_size": 2,
     "embed_dim": 400,
-    "epochs": 5,
+    "epochs": 2,
     "learning_rate": 3e-3,
     "patience": 10000,
     "batch_size": 8192,
@@ -133,11 +133,8 @@ def main():
     logging.info(f"Using device: {device}")
 
     run = wandb.init(
-        # Set the wandb entity where your project will be logged (generally your team name).
         entity="tyronenicholas",
-        # Set the wandb project where this run will be logged.
         project="Word2Vec",
-        # Track hyperparameters and run metadata.
         config=hyperparameters,
     )
 

@@ -70,3 +70,5 @@ export TMPDIR=/dev/shm
 #print("Flash-Attention OK on", torch.version.cuda,
 #      "with", torch.cuda.get_device_name(0))
 #PY
+
+pip install -r training/requirements.txt -c training/constraints.txt

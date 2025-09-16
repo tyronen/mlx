@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -11,19 +12,36 @@ from datasets import load_dataset
 from common import utils
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9.+#_]+")
+COMMENT_SAMPLE = 8
 
 
 def tokenize_title_batch(batch):
     types = batch["type"]
     titles = batch["title"]
+    texts = batch["text"]
     out = []
     append = out.append
-    for t, s in zip(types, titles):
-        if t == "story" and isinstance(s, str) and s.strip():
+    for t, ttl, txt in zip(types, titles, texts):
+        s = ttl if t == "story" else (txt if t == "comment" else None)
+        if isinstance(s, str) and s.strip():
             append(TOKEN_RE.findall(s.lower()))
         else:
             append([])
     return {"tokens": out}
+
+
+def keep_row(ex):
+    t = ex.get("type", None)
+    if t == "story":
+        return True
+    if t != "comment":
+        return False
+    raw_id = ex.get("id", "")
+    try:
+        n = int(raw_id)
+    except Exception:
+        n = int(hashlib.md5(str(raw_id).encode("utf-8")).hexdigest(), 16)
+    return (n % COMMENT_SAMPLE) == 0
 
 
 def main():
@@ -38,8 +56,9 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     # 1) Load minimal columns
     ds = load_dataset("OpenPipe/hacker-news", split="train")
-    keep = [c for c in ("type", "title") if c in ds.column_names]
+    keep = [c for c in ("type", "title", "text", "id") if c in ds.column_names]
     ds = ds.remove_columns([c for c in ds.column_names if c not in keep])
+    ds = ds.filter(keep_row)
 
     # 2) Tokenize in parallel (cached on disk by HF)
     ds = ds.map(
@@ -47,7 +66,7 @@ def main():
         batched=True,
         batch_size=args.batch_size,
         num_proc=args.num_proc,
-        desc="Tokenizing titles (batched)",
+        desc="Tokenizing (batched)",
     )
 
     # 3) Pass 1: count tokens -> vocab  (PANDAS, VECTORIZED)
@@ -77,7 +96,7 @@ def main():
     # Filter the flat Series to only vocab, map to ids, and measure length
     idx_series = s[s.isin(word_to_ix)].map(word_to_ix).astype("int32")
     # Take every Nth token to maintain temporal distribution
-    step = len(idx_series) // 15_000_000
+    step = len(idx_series) // 10_000_000
     idx_series = idx_series.iloc[::step]
     total_kept = int(idx_series.shape[0])
     logging.info(f"Total kept tokens: {total_kept:,}")
