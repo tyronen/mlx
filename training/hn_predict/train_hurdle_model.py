@@ -7,11 +7,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from tqdm import tqdm
 
 from common import utils
-from models.hn_predict import ClassifierModel, QuantileRegressionModel
+from models.hn_predict import ClassifierModel, QuantileRegressionModel, CLASSIFIER_MAX
 from .dataloader import PrecomputedNPZDataset
 from .helpers import QuantileLoss
 
@@ -21,7 +21,6 @@ hyperparameters = {
     "epochs_regressor": 5,
     "lr_classifier": 1e-3,
     "lr_regressor": 1e-4,
-    "threshold": 6,
 }
 DEVICE = utils.get_device()
 
@@ -34,22 +33,13 @@ torch.set_float32_matmul_precision("high")
 torch.backends.cudnn.benchmark = True
 
 
-def estimate_pos_weight(dset):
-    y = dset.targets  # tensor on CPU
-    pos = (y > hyperparameters["threshold"]).sum().item()
-    tot = y.numel()
-    neg = max(0, tot - pos)
-    w = (neg / pos) if pos > 0 else 1.0
-    # clamp to something sane
-    return float(np.clip(w, 0.5, 50.0))
-
-
-def make_data_loader(npz_path, task, shuffle):
+def make_data_loader(npz_path, task, shuffle, sampler=None):
     dataset = PrecomputedNPZDataset(npz_path, task=task)
     return dataset, DataLoader(
         dataset,
         batch_size=hyperparameters["batch_size"],
         shuffle=shuffle,
+        sampler=sampler,
         pin_memory=True,
         pin_memory_device="cuda",
         num_workers=8,
@@ -59,24 +49,15 @@ def make_data_loader(npz_path, task, shuffle):
 
 if __name__ == "__main__":
     utils.setup_logging()
+    logging.info("Starting run")
     model_dir = "data"
     os.makedirs(model_dir, exist_ok=True)
-    run = wandb.init(
-        entity="tyronenicholas",
-        project="hn_predict",
-        config=hyperparameters,
-    )
 
     with open(VOCAB_FILE, "r") as f:
         vocabs = json.load(f)
 
     ### ---------- CLASSIFIER ----------
-    train_class_dataset, train_class_dataloader = make_data_loader(
-        TRAIN_FILE, task="classification", shuffle=True
-    )
-    _, val_class_dataloader = make_data_loader(
-        VAL_FILE, task="classification", shuffle=False
-    )
+    train_class_dataset = PrecomputedNPZDataset(TRAIN_FILE, task="classification")
 
     sample_batch = train_class_dataset[0]
     features_num_sample, title_emb_sample, *_ = sample_batch
@@ -89,19 +70,62 @@ if __name__ == "__main__":
         "user_vocab_size": len(vocabs["user_vocab"]),
     }
     classifier = ClassifierModel(**classifier_config).to(DEVICE)
-
     optimizer_class = optim.Adam(
         classifier.parameters(), lr=hyperparameters["lr_classifier"]
     )
-    w = estimate_pos_weight(train_class_dataset)
-    pos_weight = torch.tensor([w], device=DEVICE)
-    criterion_class = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    logging.info(f"Using pos_weight={w:.3f} (neg/pos)")
+
+    # Compute class weights (inverse frequency) once from train set to soften imbalance
+    with torch.no_grad():
+        y_train = train_class_dataset.targets
+        y_classes = torch.clamp(
+            y_train.long(), 0, CLASSIFIER_MAX + 1
+        )  # 0..6 exact, 7 for >=7
+        hist = torch.bincount(y_classes, minlength=(CLASSIFIER_MAX + 2)).to(
+            torch.float32
+        )
+    logging.info(f"Class counts: {hist.tolist()}")
+    inv = 1.0 / torch.clamp(hist, 1.0)
+    inv = torch.clamp(inv, 1.0, 50.0)  # cap extremes
+    sample_weights = inv[y_classes].to(torch.float64)
+    sampler = WeightedRandomSampler(
+        weights=sample_weights.detach().to(torch.double),
+        num_samples=sample_weights.numel(),
+        replacement=True,
+    )
+
+    beta = 0.999
+    beta_t = torch.tensor(beta, dtype=hist.dtype, device=hist.device)
+
+    # Effective number of samples per class (Cui et al.)
+    effective_num = (1.0 - torch.pow(beta_t, hist)) / (1.0 - beta_t)
+
+    # Raw weights = 1 / effective_num, then normalize and clip
+    raw_class_weights = 1.0 / torch.clamp(effective_num, min=1e-6)
+    normalized_class_weights = raw_class_weights / raw_class_weights.mean()
+    clipped_class_weights = torch.clamp(normalized_class_weights, min=0.5, max=5.0)
+
+    class_weights = clipped_class_weights.to(device=DEVICE, dtype=torch.float32)
+    logging.info(f"Class weights: {[round(x, 3) for x in class_weights.tolist()]}")
+
+    criterion_class = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.05)
+
+    run = wandb.init(
+        entity="tyronenicholas",
+        project="hn_predict",
+        config=hyperparameters,
+    )
+
+    train_class_dataset, train_class_dataloader = make_data_loader(
+        TRAIN_FILE, task="classification", shuffle=False, sampler=sampler
+    )
+    _, val_class_dataloader = make_data_loader(
+        VAL_FILE, task="classification", shuffle=False
+    )
 
     best_class_val_loss = float("inf")
     best_reg_val_loss = float("inf")
 
-    for epoch in range(1, hyperparameters["epochs_classifer"] + 1):
+    for epoch in range(1, hyperparameters["epochs_classifier"] + 1):
         classifier.train()
         train_loss = 0
 
@@ -112,12 +136,10 @@ if __name__ == "__main__":
             features_num, title_emb, domain_idx, tld_idx, user_idx, target = [
                 b.to(DEVICE, non_blocking=True) for b in batch
             ]
-            target = (target > hyperparameters["threshold"]).float()
+            target_cls = torch.clamp(target.long(), max=CLASSIFIER_MAX + 1)
             optimizer_class.zero_grad()
-            logits = classifier(
-                features_num, title_emb, domain_idx, tld_idx, user_idx
-            ).squeeze()
-            loss = criterion_class(logits, target)
+            logits = classifier(features_num, title_emb, domain_idx, tld_idx, user_idx)
+            loss = criterion_class(logits, target_cls)
             loss.backward()
             optimizer_class.step()
             train_loss += loss.item()
@@ -128,7 +150,7 @@ if __name__ == "__main__":
         classifier.eval()
         val_loss = 0
         correct, total = 0, 0
-        all_logits = []
+        all_preds = []
         all_targets = []
         with torch.no_grad():
             for batch in tqdm(
@@ -137,48 +159,62 @@ if __name__ == "__main__":
                 features_num, title_emb, domain_idx, tld_idx, user_idx, target = [
                     b.to(DEVICE, non_blocking=True) for b in batch
                 ]
-                target = (target > hyperparameters["threshold"]).float()
+                target_cls = torch.clamp(target.long(), max=CLASSIFIER_MAX + 1)
                 logits = classifier(
                     features_num, title_emb, domain_idx, tld_idx, user_idx
-                ).squeeze()
-                loss = criterion_class(logits, target)
+                )
+                loss = criterion_class(logits, target_cls)
                 val_loss += loss.item()
-                all_logits.append(logits.cpu())
-                all_targets.append(target.cpu())
+                preds = torch.argmax(logits, dim=1)
+                all_preds.append(preds.cpu())
+                all_targets.append(target_cls.cpu())
 
-        all_logits = torch.cat(all_logits)
-        all_targets = torch.cat(all_targets)
-        probs = torch.sigmoid(all_logits)
-        ths = torch.linspace(0.05, 0.95, steps=19)
-        best_f1, best_th = 0.0, 0.5
-        for th in ths:
-            preds = (probs > th).float()
-            tp = ((preds == 1) & (all_targets == 1)).sum().item()
-            fp = ((preds == 1) & (all_targets == 0)).sum().item()
-            fn = ((preds == 0) & (all_targets == 1)).sum().item()
-            precision = tp / max(1, tp + fp)
-            recall = tp / max(1, tp + fn)
-            f1 = 2 * precision * recall / max(1e-8, precision + recall)
-            if f1 > best_f1:
-                best_f1, best_th = f1, float(th)
+        all_preds = torch.cat(all_preds).view(-1).cpu()
+        all_targets = torch.cat(all_targets).view(-1).cpu()
 
-        # compute metrics at best threshold for logging
-        final_preds = (probs > best_th).float()
-        val_acc = (final_preds == all_targets).float().mean().item()
-
-        avg_val_loss = val_loss / len(val_class_dataloader)
-        run.log(
-            {
-                "Classifier/Val_F1": best_f1,
-                "Classifier/Val_Thresh": best_th,
-                "Classifier/Val_Loss": avg_val_loss,
-                "Classifier/Val_Acc": val_acc,
-            }
+        confusion_matrix = torch.zeros(
+            CLASSIFIER_MAX + 2, CLASSIFIER_MAX + 2, dtype=torch.int64
+        )
+        for tgt, pred in zip(all_targets, all_preds):
+            confusion_matrix[tgt, pred] += 1
+        logging.info(
+            "Confusion (rows=true, cols=pred):\n"
+            + "\n".join(
+                " ".join(f"{int(x):7d}" for x in row.tolist())
+                for row in confusion_matrix
+            )
         )
 
+        f1s = []
+        for cls in range(CLASSIFIER_MAX + 2):
+            true_pos = confusion_matrix[cls, cls].item()
+            false_pos = (confusion_matrix[:, cls].sum() - true_pos).item()
+            false_neg = (confusion_matrix[cls, :].sum() - true_pos).item()
+            prec = true_pos / max(1, true_pos + false_pos)
+            rec = true_pos / max(1, true_pos + false_neg)
+            f1 = 2 * prec * rec / max(1e-8, prec + rec)
+            f1s.append(f1)
+            logging.info(f"class {cls}: prec={prec:.3f} rec={rec:.3f} f1={f1:.3f}")
+
+        avg_val_loss = val_loss / len(val_class_dataloader)
+        acc = (all_preds == all_targets).float().mean().item()
+        macro_f1 = float(np.mean(f1s))
+
+        run.log(
+            {
+                "Classifier/Val_Loss": avg_val_loss,
+                "Classifier/Val_Acc": acc,
+                "Classifier/Val_MacroF1": macro_f1,
+            }
+        )
         logging.info(
             f"✓ Classifier Epoch {epoch}: Train Loss {avg_train_loss:.4f}, "
-            f"Val Loss {avg_val_loss:.4f}, Val Acc {val_acc:.4f} (best_th={best_th:.2f}, F1={best_f1:.3f})"
+            f"Val Loss {avg_val_loss:.4f}, Acc {acc:.4f}, MacroF1 {macro_f1:.3f}"
+        )
+        vals, counts = torch.unique(all_targets, return_counts=True)
+        logging.info(
+            f"Val class histogram: "
+            + ", ".join(f"{int(v)}:{int(c)}" for v, c in zip(vals, counts))
         )
 
         if avg_val_loss < best_class_val_loss:
@@ -224,10 +260,10 @@ if __name__ == "__main__":
             ]
 
             optimizer_reg.zero_grad()
-            mask = target > hyperparameters["threshold"]
+            mask = target > CLASSIFIER_MAX
             if not mask.any():
                 continue
-            target_excess = target[mask] - hyperparameters["threshold"]
+            target_excess = target[mask] - CLASSIFIER_MAX - 1.0
             target_log = torch.log1p(target_excess)
             output = regressor(features_num, title_emb, domain_idx, tld_idx, user_idx)
             output_pos = output[mask]
@@ -255,10 +291,10 @@ if __name__ == "__main__":
                     b.to(DEVICE, non_blocking=True) for b in batch
                 ]
 
-                mask = target > hyperparameters["threshold"]
+                mask = target > CLASSIFIER_MAX
                 if not mask.any():
                     continue
-                target_excess = target[mask] - hyperparameters["threshold"]
+                target_excess = target[mask] - CLASSIFIER_MAX - 1.0
                 target_log = torch.log1p(target_excess)
                 output = regressor(
                     features_num, title_emb, domain_idx, tld_idx, user_idx
