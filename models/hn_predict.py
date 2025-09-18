@@ -3,7 +3,7 @@ import torch.nn as nn
 
 DATASET_NAME = "OpenPipe/hacker-news"
 
-CLASSIFIER_MAX = 6
+CLASSIFIER_MAX = 1
 
 
 class ClassifierModel(nn.Module):
@@ -39,7 +39,7 @@ class ClassifierModel(nn.Module):
         self.linear2 = nn.Linear(scale * total_input_size, scale * total_input_size)
         self.relu2 = nn.ReLU()
 
-        self.linear3 = nn.Linear(scale * total_input_size, CLASSIFIER_MAX + 2)
+        self.linear3 = nn.Linear(scale * total_input_size, CLASSIFIER_MAX)
 
         self.dropout = nn.Dropout(p=0.3)
 
@@ -61,7 +61,7 @@ class ClassifierModel(nn.Module):
         x = self.relu2(x)
 
         out = self.linear3(x)
-        return out  # shape: [batch_size, CLASSIFIER_MAX + 2]
+        return out  # shape: [batch_size, CLASSIFIER_MAX]
 
 
 class QuantileRegressionModel(nn.Module):

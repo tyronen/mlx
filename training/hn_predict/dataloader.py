@@ -1,26 +1,23 @@
-import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 
-class PrecomputedNPZDataset(Dataset):
-    def __init__(self, npz_path, task="regression"):
-        data = np.load(npz_path, allow_pickle=True)
+class PrecomputedDataset(Dataset):
+    def __init__(self, path):
+        data = torch.load(path, map_location="cpu")
 
-        self.features_num = torch.tensor(data["features_num"], dtype=torch.float32)
-        self.title_embeddings = torch.tensor(
-            data["title_embeddings"], dtype=torch.float32
-        )
-        self.domain_indices = torch.tensor(data["domain_index"], dtype=torch.long)
-        self.tld_indices = torch.tensor(data["tld_index"], dtype=torch.long)
-        self.user_indices = torch.tensor(data["user_index"], dtype=torch.long)
+        self.features_num = data["features_num"].to(torch.float32)
+        self.title_embeddings = data["title_embeddings"].to(torch.float32)
+        self.domain_indices = data["domain_index"]
+        self.tld_indices = data["tld_index"]
+        self.user_indices = data["user_index"]
 
-        self.targets = torch.tensor(data["targets"], dtype=torch.float32)
+        self.targets = data["targets"]
 
-        self.valid_indices = torch.arange(len(self.targets))  # use full dataset
+        self.valid_indices = torch.arange(self.targets.shape[0])  # use full dataset
 
     def __len__(self):
-        return len(self.valid_indices)
+        return self.targets.shape[0]
 
     def __getitem__(self, idx):
         real_idx = self.valid_indices[idx]

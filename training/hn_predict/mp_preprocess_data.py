@@ -1,3 +1,4 @@
+import gc
 import json
 import multiprocessing as mp
 import os
@@ -134,6 +135,47 @@ def process_row(row):
     }
 
 
+def fp16_adequacy_report(name, arr32):  # arr32: np.float32 [N, D]
+
+    arr32 = arr32.astype(np.float32, copy=False)
+    arr16 = arr32.astype(np.float16)  # simulate storage
+    back32 = arr16.astype(np.float32)
+
+    abs_err = np.abs(back32 - arr32)
+    rel_err = abs_err / np.maximum(1e-8, np.abs(arr32))
+
+    report = {
+        "name": name,
+        "shape": arr32.shape,
+        "abs_max": float(np.max(np.abs(arr32))),
+        "abs_p99_9": float(np.percentile(np.abs(arr32), 99.9)),
+        "abs_err_max": float(abs_err.max()),
+        "abs_err_p99_9": float(np.percentile(abs_err, 99.9)),
+        "rel_err_max": float(rel_err.max()),
+        "rel_err_p99_9": float(np.percentile(rel_err, 99.9)),
+        "nan_frac": float(np.mean(~np.isfinite(arr32))),
+    }
+    print(report)
+
+
+def report_clipping(arr, thresholds=(8, 10, 12)):
+    arr_abs = np.abs(arr)
+    for th in thresholds:
+        frac = np.mean(arr_abs > th)
+        print(f"Clip threshold ±{th}: {frac:.6f} fraction of values above threshold")
+
+
+def prepare_for_16(name, array32, threshold):
+    feat_mean = array32.mean(axis=0, dtype=np.float64)
+    feat_std = array32.std(axis=0, dtype=np.float64)
+    feat_std[feat_std < 1e-6] = 1e-6
+
+    # z-score + clip to fp16-friendly range
+    array32 = (array32 - feat_mean) / feat_std
+    np.clip(array32, -threshold, threshold, out=array32)
+    return array32
+
+
 def precompute_parallel(
     df,
     embedding_matrix,
@@ -152,7 +194,7 @@ def precompute_parallel(
 
     if compute_delta_t:
         delta_t = (ref_time - df["time"]) / np.timedelta64(30, "D")
-        delta_t = delta_t.to_numpy().astype(np.float32)
+        delta_t = torch.tensor(delta_t, dtype=torch.float16)
     else:
         delta_t = None
 
@@ -171,18 +213,26 @@ def precompute_parallel(
     ) as pool:
         results = list(
             tqdm(
-                pool.imap(process_row, df.to_dict(orient="records")),
+                pool.imap_unordered(process_row, df.to_dict(orient="records")),
                 total=len(df),
                 desc="Precomputing",
             )
         )
 
-    all_features_num = np.stack([r["features_num"] for r in results]).astype(np.float32)
-    all_embeddings = np.stack([r["embedding"] for r in results]).astype(np.float32)
-    all_targets = np.array([r["target"] for r in results], dtype=np.float32)
-    all_domain_idx = np.array([r["domain_idx"] for r in results], dtype=np.int32)
-    all_tld_idx = np.array([r["tld_idx"] for r in results], dtype=np.int32)
-    all_user_idx = np.array([r["user_idx"] for r in results], dtype=np.int32)
+    features_array = np.stack([r["features_num"] for r in results])
+    embeddings_array = np.stack([r["embedding"] for r in results])
+    all_targets = torch.tensor([r["target"] for r in results], dtype=torch.float32)
+    all_domain_idx = torch.tensor([r["domain_idx"] for r in results], dtype=torch.long)
+    all_tld_idx = torch.tensor([r["tld_idx"] for r in results], dtype=torch.long)
+    all_user_idx = torch.tensor([r["user_idx"] for r in results], dtype=torch.long)
+    del results
+    gc.collect()
+
+    features_array = prepare_for_16("features_num", features_array, 25)
+    embeddings_array = prepare_for_16("title_embeddings", embeddings_array, 10)
+
+    all_features_num = torch.from_numpy(features_array).to(torch.float16)
+    all_embeddings = torch.from_numpy(embeddings_array).to(torch.float16)
 
     return (
         all_features_num,
@@ -200,7 +250,7 @@ if __name__ == "__main__":
     TRAINING_VOCAB_PATH = "data/train_vocab.json"
     FILEPATH = "data/posts.parquet"
     OUTPUT_DIR = "data"
-    NUM_WORKERS = 20
+    NUM_WORKERS = min(8, os.cpu_count() or 8)
 
     w2i, embedding_matrix = load_embeddings(EMBEDDING_FILE)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -262,15 +312,17 @@ if __name__ == "__main__":
         num_workers=NUM_WORKERS,
     )
 
-    np.savez(
-        os.path.join(OUTPUT_DIR, "train.npz"),
-        features_num=train_features_num,
-        title_embeddings=train_embeddings,
-        domain_index=train_domain_idx,
-        tld_index=train_tld_idx,
-        user_index=train_user_idx,
-        delta_t=train_delta_t,
-        targets=train_targets,
+    torch.save(
+        {
+            "features_num": train_features_num,
+            "title_embeddings": train_embeddings,
+            "domain_index": train_domain_idx,
+            "tld_index": train_tld_idx,
+            "user_index": train_user_idx,
+            "delta_t": train_delta_t,
+            "targets": train_targets,
+        },
+        os.path.join(OUTPUT_DIR, "train.pt"),
     )
 
     (
@@ -294,15 +346,17 @@ if __name__ == "__main__":
         num_workers=NUM_WORKERS,
     )
 
-    np.savez(
-        os.path.join(OUTPUT_DIR, "val.npz"),
-        features_num=val_features_num,
-        title_embeddings=val_embeddings,
-        domain_index=val_domain_idx,
-        tld_index=val_tld_idx,
-        user_index=val_user_idx,
-        delta_t=val_delta_t,
-        targets=val_targets,
+    torch.save(
+        {
+            "features_num": val_features_num,
+            "title_embeddings": val_embeddings,
+            "domain_index": val_domain_idx,
+            "tld_index": val_tld_idx,
+            "user_index": val_user_idx,
+            "delta_t": val_delta_t,
+            "targets": val_targets,
+        },
+        os.path.join(OUTPUT_DIR, "val.pt"),
     )
 
     print("Precomputation finished!")
