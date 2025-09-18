@@ -9,6 +9,7 @@ import wandb
 from torch.nn import BCEWithLogitsLoss
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
+from transformers import get_cosine_schedule_with_warmup
 
 from common import utils
 from models.hn_predict import ClassifierModel, QuantileRegressionModel, CLASSIFIER_MAX
@@ -19,8 +20,8 @@ hyperparameters = {
     "batch_size": 8192,
     "epochs_classifier": 5,
     "epochs_regressor": 5,
-    "lr_classifier": 1e-3,
-    "lr_regressor": 1e-4,
+    "lr_classifier": 1e-2,
+    "lr_regressor": 1e-3,
 }
 DEVICE = utils.get_device()
 
@@ -76,10 +77,11 @@ if __name__ == "__main__":
     optimizer_class = optim.Adam(
         classifier.parameters(), lr=hyperparameters["lr_classifier"]
     )
+    scheduler_class = get_cosine_schedule_with_warmup(
+        optimizer_class, 1, hyperparameters["epochs_classifier"]
+    )
     logging.info("Built model")
 
-    # after: train_class_dataset, train_class_dataloader = make_data_loader(...)
-    # hurdle is CLASSIFIER_MAX (e.g., 6 for ≥7)
     with torch.no_grad():
         y = train_dataset.targets  # torch tensor already in RAM
         pos = (y > CLASSIFIER_MAX).sum().item()
@@ -118,8 +120,10 @@ if __name__ == "__main__":
             ).squeeze(1)
             loss = criterion_class(logits, target_cls)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(classifier.parameters(), 1.0)
             optimizer_class.step()
             train_loss += loss.item()
+        scheduler_class.step()
 
         avg_train_loss = train_loss / len(train_class_dataloader)
 
@@ -184,12 +188,14 @@ if __name__ == "__main__":
 
         run.log(
             {
+                "Classifier/Train_Loss": avg_train_loss,
                 "Classifier/Val_Loss": avg_val_loss,
                 "Classifier/Val_F1": best["f1"],
                 "Classifier/Val_Acc": val_acc,
                 "Classifier/Val_Thresh": best["th"],
                 "Classifier/Val_PosRate": pos_rate,
                 "Classifier/Val_PredRate": best["pred_rate"],
+                "Classifier/LearningRate": scheduler_class.get_last_lr()[0],
             }
         )
         logging.info(
@@ -234,6 +240,10 @@ if __name__ == "__main__":
     optimizer_reg = optim.Adam(
         regressor.parameters(), lr=hyperparameters["lr_regressor"]
     )
+    scheduler_reg = get_cosine_schedule_with_warmup(
+        optimizer_reg, 1, hyperparameters["epochs_regressor"]
+    )
+
     criterion_reg = QuantileLoss(quantiles, device=DEVICE).to(DEVICE)
 
     for epoch in range(1, hyperparameters["epochs_regressor"] + 1):
@@ -255,10 +265,12 @@ if __name__ == "__main__":
             loss = criterion_reg(output, target_log)
 
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(regressor.parameters(), 1.0)
             optimizer_reg.step()
             train_loss += loss.item()
             train_steps += 1
 
+        scheduler_reg.step()
         avg_train_loss = train_loss / max(1, train_steps)
 
         # ---- VALIDATION ----
@@ -320,6 +332,7 @@ if __name__ == "__main__":
                 "QuantileRegressor/Val_Loss": avg_val_loss,
                 "QuantileRegressor/Val_MAE_Log": mae_log,
                 "QuantileRegressor/Val_MAE_Lin": mae_lin,
+                "QuantileRegressor/LearningRate": scheduler_reg.get_last_lr()[0],
             }
         )
 
