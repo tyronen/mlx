@@ -1,7 +1,6 @@
 import argparse
 import logging
 from collections import defaultdict
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -14,11 +13,7 @@ SECONDS_PER_YEAR = 365.25 * SECONDS_PER_DAY
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--posts", default="data/posts.parquet", help="Posts file")
-parser.add_argument(
-    "--titles",
-    default="data/hn_titles.txt.gz",
-    help="Where to write HN story titles (newline-delimited; .gz supported)",
-)
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
 )
@@ -39,18 +34,6 @@ def mean(x):
 
 def percent(num, denom):
     return np.where(denom == 0, 0, 100.0 * num / denom)
-
-
-def write_titles_file(df: pd.DataFrame, out_path: str):
-    p = Path(out_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    titles = df["title"].dropna()
-
-    out_df = pd.DataFrame({("title"): [t.strip() for t in titles]})
-    out_df.to_parquet(p, index=False)
-
-    logging.info(f"Wrote {len(titles):,} titles -> {p}")
 
 
 def comment_calculations(parent_map, comments, _story_ids_unused=None):
@@ -116,13 +99,6 @@ def main(posts_file):
     parent_map = not_dead.set_index("id")["parent"].to_dict()
     logging.info("Filtering for stories")
     stories = not_dead[not_dead["type"] == "story"].set_index("id")
-    logging.info("Writing titles file for word2vec reuse")
-    write_titles_file(
-        df=stories.reset_index()[
-            ["id", "title"]
-        ],  # id kept for future-proofing if needed
-        out_path=args.titles,
-    )
     logging.info("Filtering for comments")
     comments = not_dead[not_dead["type"] == "comment"].copy()
     logging.info("Calculating comment length")
@@ -299,7 +275,7 @@ def main(posts_file):
     bins = [-1, 0, 10, 100, 500, np.inf]
     labels = ["new_user", "low_tier", "mid_tier", "high_tier", "power_user"]
     stories_df["author_tier"] = pd.cut(
-        stories_df["user_max_score_previously"], bins=bins, labels=labels
+        stories_df["user_max_score_previous"], bins=bins, labels=labels
     )
 
     # 3. Final selection and write‑out -------------------------------------

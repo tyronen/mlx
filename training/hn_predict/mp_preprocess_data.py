@@ -135,37 +135,7 @@ def process_row(row):
     }
 
 
-def fp16_adequacy_report(name, arr32):  # arr32: np.float32 [N, D]
-
-    arr32 = arr32.astype(np.float32, copy=False)
-    arr16 = arr32.astype(np.float16)  # simulate storage
-    back32 = arr16.astype(np.float32)
-
-    abs_err = np.abs(back32 - arr32)
-    rel_err = abs_err / np.maximum(1e-8, np.abs(arr32))
-
-    report = {
-        "name": name,
-        "shape": arr32.shape,
-        "abs_max": float(np.max(np.abs(arr32))),
-        "abs_p99_9": float(np.percentile(np.abs(arr32), 99.9)),
-        "abs_err_max": float(abs_err.max()),
-        "abs_err_p99_9": float(np.percentile(abs_err, 99.9)),
-        "rel_err_max": float(rel_err.max()),
-        "rel_err_p99_9": float(np.percentile(rel_err, 99.9)),
-        "nan_frac": float(np.mean(~np.isfinite(arr32))),
-    }
-    print(report)
-
-
-def report_clipping(arr, thresholds=(8, 10, 12)):
-    arr_abs = np.abs(arr)
-    for th in thresholds:
-        frac = np.mean(arr_abs > th)
-        print(f"Clip threshold ±{th}: {frac:.6f} fraction of values above threshold")
-
-
-def prepare_for_16(name, array32, threshold):
+def prepare_for_16(array32, threshold):
     feat_mean = array32.mean(axis=0, dtype=np.float64)
     feat_std = array32.std(axis=0, dtype=np.float64)
     feat_std[feat_std < 1e-6] = 1e-6
@@ -228,8 +198,8 @@ def precompute_parallel(
     del results
     gc.collect()
 
-    features_array = prepare_for_16("features_num", features_array, 25)
-    embeddings_array = prepare_for_16("title_embeddings", embeddings_array, 10)
+    features_array = prepare_for_16(features_array, 25)
+    embeddings_array = prepare_for_16(embeddings_array, 10)
 
     all_features_num = torch.from_numpy(features_array).to(torch.float16)
     all_embeddings = torch.from_numpy(embeddings_array).to(torch.float16)
