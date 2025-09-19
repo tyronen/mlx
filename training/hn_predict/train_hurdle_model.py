@@ -6,8 +6,9 @@ import numpy as np
 import torch
 import torch.optim as optim
 import wandb
-from torch.nn import BCEWithLogitsLoss
+from sklearn.metrics import average_precision_score, brier_score_loss
 from torch.utils.data import DataLoader, Subset
+from torchvision.ops import sigmoid_focal_loss
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
@@ -46,6 +47,54 @@ def make_data_loader(dataset, shuffle):
     )
 
 
+@torch.no_grad()
+def end_to_end_val_mae(val_loader, classifier, regressor, thresh, device):
+    classifier.eval()
+    regressor.eval()
+    abs_errs = []
+
+    for batch in val_loader:
+        features_num, title_emb, domain_idx, tld_idx, user_idx, target = [
+            b.to(device, non_blocking=True) for b in batch
+        ]
+        # fp32 into the nets (storage can be fp16)
+        features_num = features_num.float()
+        title_emb = title_emb.float()
+        domain_idx = domain_idx.long()
+        tld_idx = tld_idx.long()
+        user_idx = user_idx.long()
+
+        # 1) classify ≥(CLASSIFIER_MAX+1) ?  (with your setup: ≥2)
+        logits = classifier(
+            features_num, title_emb, domain_idx, tld_idx, user_idx
+        ).squeeze(1)
+        probs = torch.sigmoid(logits)
+        is_big = probs > thresh
+
+        # 2) build predictions
+        pred = torch.full_like(
+            target, float(CLASSIFIER_MAX), dtype=torch.float32
+        )  # ≤1 → predict 1
+        pred += 0.0  # keep dtype
+
+        if is_big.any():
+            out = regressor(
+                features_num[is_big],
+                title_emb[is_big],
+                domain_idx[is_big],
+                tld_idx[is_big],
+                user_idx[is_big],
+            )  # [n_big, num_quantiles] in log-space
+            median_log = out[:, 2]
+            excess = torch.expm1(median_log)  # back to linear
+            pred[is_big] = (CLASSIFIER_MAX + 1.0) + excess  # 2 + excess
+
+        abs_errs.append(torch.abs(pred - target).cpu())
+
+    mae = torch.cat(abs_errs).mean().item()
+    return mae
+
+
 if __name__ == "__main__":
     utils.setup_logging()
     logging.info("Starting run")
@@ -82,16 +131,26 @@ if __name__ == "__main__":
     )
     logging.info("Built model")
 
+    # after you build datasets
     with torch.no_grad():
-        y = train_dataset.targets  # torch tensor already in RAM
+        y = train_dataset.targets
         pos = (y > CLASSIFIER_MAX).sum().item()
         tot = y.numel()
         neg = tot - pos
-        pos_w = (neg / max(1, pos)) if pos > 0 else 1.0
+        pos_frac = pos / tot
+        neg_frac = neg / tot
 
-    pos_weight = torch.tensor([pos_w], device=DEVICE, dtype=torch.float32)
-    criterion_class = BCEWithLogitsLoss(pos_weight=pos_weight)
-    logging.info(f"pos_weight (neg/pos) at hurdle {CLASSIFIER_MAX}: {pos_w:.3f}")
+    # Focal loss weights: alpha is the weight for the *positive* class.
+    # Since positives are the majority in your split (≈ pos_frac),
+    # set alpha small so negatives get (1 - alpha) > alpha.
+    alpha = float(neg_frac)  # e.g., ≈ 0.26 if ~26% are negatives
+
+    def focal_loss_fn(logits, targets):
+        return sigmoid_focal_loss(
+            logits, targets, alpha=alpha, gamma=2.0, reduction="mean"
+        )
+
+    criterion_class = focal_loss_fn
 
     run = wandb.init(
         entity="tyronenicholas",
@@ -101,6 +160,7 @@ if __name__ == "__main__":
 
     best_class_val_loss = float("inf")
     best_reg_val_loss = float("inf")
+    best_threshold_for_inference = 0.5
 
     for epoch in range(1, hyperparameters["epochs_classifier"] + 1):
         classifier.train()
@@ -155,7 +215,7 @@ if __name__ == "__main__":
         probs = torch.sigmoid(all_logits)
         pos_rate = all_targets.mean().item()
 
-        ths = torch.linspace(0.05, 0.95, steps=19)
+        ths = torch.linspace(0.01, 0.99, steps=14)
         best = dict(th=0.5, f1=0.0, acc=0.0, p=0.0, r=0.0, pred_rate=0.0)
         for th in ths:
             preds = (probs > th).float()
@@ -182,9 +242,22 @@ if __name__ == "__main__":
                     pred_rate=pred_rate,
                 )
 
+        best_threshold_for_inference = best["th"]
         avg_val_loss = val_loss / len(val_class_dataloader)
         final_preds = (probs > best["th"]).float()
         val_acc = (final_preds == all_targets).float().mean().item()
+        all_targets_num = all_targets.numpy()
+        probs_num = probs.numpy()
+        ap = average_precision_score(all_targets_num, probs_num)
+        brier = brier_score_loss(all_targets_num, probs_num)
+        beta = 2.0
+        precision = best["p"]
+        recall = best["r"]
+        f2 = (
+            0.0
+            if (precision + recall) == 0
+            else (1 + beta**2) * precision * recall / ((beta**2) * precision + recall)
+        )
 
         run.log(
             {
@@ -196,11 +269,16 @@ if __name__ == "__main__":
                 "Classifier/Val_PosRate": pos_rate,
                 "Classifier/Val_PredRate": best["pred_rate"],
                 "Classifier/LearningRate": scheduler_class.get_last_lr()[0],
+                "Classifier/Val_AP": ap,
+                "Classifier/Val_Brier": brier,
+                "Classifier/Val_F2": f2,
             }
         )
         logging.info(
             f"✓ Classifier Epoch {epoch}: Train Loss {avg_train_loss:.4f}, "
-            f"Val Loss {avg_val_loss:.4f}, Acc {val_acc:.4f}, MacroF1 {best['f1']:.3f}"
+            f"Val Loss {avg_val_loss:.4f}, Acc {val_acc:.4f}, MacroF1 {best['f1']:.3f} "
+            f"Val AP {ap:.4f} Brier {brier:.4f} F2 {f2:.4f} "
+            f"pos_rate: {pos_rate:.3f} pred_rate: {best['pred_rate']:.3f}"
         )
         vals, counts = torch.unique(all_targets, return_counts=True)
         logging.info(
@@ -325,7 +403,14 @@ if __name__ == "__main__":
         mae_log = np.mean(np.abs(median_log_preds - targets_log))
         median_lin_preds = np.expm1(median_log_preds)  # back to linear
         mae_lin = np.mean(np.abs(median_lin_preds - targets_lin))
-
+        e2e_mae = end_to_end_val_mae(
+            val_class_dataloader,
+            classifier,
+            regressor,
+            best_threshold_for_inference,
+            DEVICE,
+        )
+        logging.info(f)
         run.log(
             {
                 "QuantileRegressor/Train_Loss": avg_train_loss,
@@ -333,11 +418,13 @@ if __name__ == "__main__":
                 "QuantileRegressor/Val_MAE_Log": mae_log,
                 "QuantileRegressor/Val_MAE_Lin": mae_lin,
                 "QuantileRegressor/LearningRate": scheduler_reg.get_last_lr()[0],
+                "EndToEnd/Val_MAE": e2e_mae,
+                "EndToEnd/Thresh": best_threshold_for_inference,
             }
         )
 
         logging.info(
-            f"✓ Regressor Epoch {epoch}: Train Loss {avg_train_loss:.4f}, Val Loss {avg_val_loss:.4f}, MAE Log {mae_log:.4f} MAE Lin {mae_lin:.4f}"
+            f"✓ Regressor Epoch {epoch}: Train Loss {avg_train_loss:.4f}, Val Loss {avg_val_loss:.4f}, MAE Log {mae_log:.4f} MAE Lin {mae_lin:.4f} ✓ End-to-end MAE (val): {e2e_mae:.3f} @ thresh {best_threshold_for_inference:.2f}"
         )
 
     run.finish(0)
