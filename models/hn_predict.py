@@ -34,6 +34,7 @@ class QuantileRegressionModel(nn.Module):
             + user_embedding_dim
         )
 
+        self.dropout = nn.Dropout(p=0.3)
         self.linear1 = nn.Linear(total_input_size, scale * total_input_size)
         self.bn1 = nn.BatchNorm1d(scale * total_input_size)
         self.relu1 = nn.ReLU()
@@ -43,7 +44,6 @@ class QuantileRegressionModel(nn.Module):
         self.relu2 = nn.ReLU()
 
         self.linear3 = nn.Linear(scale * total_input_size, self.num_quantiles)
-        self.dropout = nn.Dropout(p=0.3)
 
     def forward(self, features_num, title_emb, domain_idx, tld_idx, user_idx):
         domain_emb = self.domain_embedding(domain_idx)

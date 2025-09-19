@@ -105,13 +105,6 @@ def get_story_author(parent_map, story_author_map, comment_id):
     return story_author_map.get(comment_id)
 
 
-# Running min / max / mean helper
-def expanding_shifted(stories_df, col, fn):
-    return stories_df.groupby("by", sort=False)[col].transform(
-        lambda x: getattr(x.expanding(), fn)().shift()
-    )
-
-
 def main(posts_file):
     logging.info(f"Reading items")
     items = load_items_dataframe()
@@ -259,7 +252,8 @@ def main(posts_file):
         stories_df["cum_dead_posts"], stories_df["num_posts_all"]
     )
 
-    logging.info("Computing expanding mins / maxes / means")
+    logging.info("Computing cumulative user statistics (mins, maxes, means)")
+    grouped_by_author = stories_df.groupby("by", sort=False)
     for col in [
         "depth",
         "descendants",
@@ -269,13 +263,44 @@ def main(posts_file):
         "tenth_comment_delay",
         "score",
     ]:
-        stories_df[f"user_{col}_min"] = expanding_shifted(stories_df, col, "min")
-        stories_df[f"user_{col}_max"] = expanding_shifted(stories_df, col, "max")
-        stories_df[f"user_{col}_mean"] = expanding_shifted(stories_df, col, "mean")
+        # --- Min / Max (using highly optimized cummin/cummax) ---
+        cummin_vals = grouped_by_author[col].cummin()
+        cummax_vals = grouped_by_author[col].cummax()
+
+        stories_df[f"user_{col}_min"] = cummin_vals.groupby(stories_df["by"]).shift()
+        stories_df[f"user_{col}_max"] = cummax_vals.groupby(stories_df["by"]).shift()
+
+        # --- Mean (using highly optimized cumsum/cumcount) ---
+        cumsum_vals = grouped_by_author[col].cumsum()
+        # cumcount() gives the count of previous items (0 for the first, 1 for the second, etc.)
+        cumcount_vals = grouped_by_author[col].cumcount()
+
+        # Shift cumsum to get sum of *previous* items
+        shifted_cumsum = cumsum_vals.groupby(stories_df["by"]).shift()
+
+        # Calculate mean, handling the first post for each user (where count is 0)
+        stories_df[f"user_{col}_mean"] = np.where(
+            cumcount_vals == 0, 0, shifted_cumsum / cumcount_vals
+        )
+
+    logging.info("Adding user's previous max score feature")
+    # Calculate the cumulative max score for each user. This is very fast.
+    cummax_score = stories_df.groupby("by", sort=False)["score"].cummax()
+    # Now, shift the results within each group to get the max of *previous* posts.
+    stories_df["user_max_score_previous"] = cummax_score.groupby(
+        stories_df["by"]
+    ).shift()
 
     # On a user's very first post every user_* aggregate should be 0
     user_cols = [c for c in stories_df.columns if c.startswith("user_")]
     stories_df[user_cols] = stories_df[user_cols].fillna(0)
+
+    logging.info("Creating author tiers from previous max score")
+    bins = [-1, 0, 10, 100, 500, np.inf]
+    labels = ["new_user", "low_tier", "mid_tier", "high_tier", "power_user"]
+    stories_df["author_tier"] = pd.cut(
+        stories_df["user_max_score_previously"], bins=bins, labels=labels
+    )
 
     # 3. Final selection and write‑out -------------------------------------
     output_cols = [

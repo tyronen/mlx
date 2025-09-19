@@ -18,10 +18,8 @@ from .helpers import QuantileLoss
 
 hyperparameters = {
     "batch_size": 8192,
-    "epochs_classifier": 5,
-    "epochs_regressor": 5,
-    "lr_classifier": 1e-2,
-    "lr_regressor": 1e-3,
+    "epochs": 5,
+    "learning_rate": 1e-3,
 }
 DEVICE = utils.get_device()
 
@@ -78,21 +76,21 @@ if __name__ == "__main__":
     best_val_loss = float("inf")
 
     ### ---------- REGRESSOR ----------
-    quantiles = [0.1, 0.25, 0.5, 0.75, 0.9]
+    quantiles = [0.1, 0.5, 0.8, 0.9, 0.97]
     train_dataloader = make_data_loader(train_dataset, shuffle=True)
     val_dataloader = make_data_loader(val_dataset, shuffle=False)
 
     config["num_quantiles"] = len(quantiles)
     regressor = QuantileRegressionModel(**config).to(DEVICE)
 
-    optimizer = optim.Adam(regressor.parameters(), lr=hyperparameters["lr_regressor"])
+    optimizer = optim.Adam(regressor.parameters(), lr=hyperparameters["learning_rate"])
     scheduler = get_cosine_with_min_lr_schedule_with_warmup(
-        optimizer, 1, hyperparameters["epochs_regressor"], min_lr_rate=0.25
+        optimizer, 1, hyperparameters["epochs"], min_lr_rate=0.25
     )
 
     criterion = QuantileLoss(quantiles, device=DEVICE).to(DEVICE)
 
-    for epoch in range(1, hyperparameters["epochs_regressor"] + 1):
+    for epoch in range(1, hyperparameters["epochs"] + 1):
         regressor.train()
         train_loss = 0
         train_steps = 0
@@ -160,12 +158,42 @@ if __name__ == "__main__":
 
         predictions = np.vstack(predictions)  # shape (num_samples, num_quantiles)
         targets_lin = np.concatenate(targets)  # shape (num_samples,)
-        median_log_preds = predictions[:, 2]  # 50th pct in log space
+        try:
+            median_idx = quantiles.index(0.5)
+        except ValueError:
+            # fall back to the closest quantile to 0.5
+            median_idx = int(np.argmin(np.abs(np.array(quantiles) - 0.5)))
+
+        median_log_preds = predictions[:, median_idx]  # 50th pct in log space
         targets_log = np.log1p(targets_lin)
         mae_log = np.mean(np.abs(median_log_preds - targets_log))
         median_lin_preds = np.expm1(median_log_preds)  # back to linear
         mae_lin = np.mean(np.abs(median_lin_preds - targets_lin))
         last_lr = scheduler.get_last_lr()[0]
+        score_buckets = {
+            "low (1-9)": (1, 9),
+            "medium (10-99)": (10, 99),
+            "high (100+)": (100, np.inf),
+        }
+
+        bucket_maes = {}
+        for name, (low, high) in score_buckets.items():
+            mask = (targets_lin >= low) & (targets_lin <= high)
+            if mask.sum() > 0:
+                bucket_mae = np.mean(np.abs(median_lin_preds[mask] - targets_lin[mask]))
+                bucket_maes[f"QuantileRegressor/Val_MAE_{name}"] = bucket_mae
+                logging.info(
+                    f"  ... MAE for {name}: {bucket_mae:.4f} (on {mask.sum()} samples)"
+                )
+        qs = np.array(quantiles, dtype=np.float32)
+        covered = (targets_log[:, None] <= predictions).mean(
+            axis=0
+        )  # fraction ≤ each quantile
+        coverage = {}
+        for q, c in zip(qs, covered):
+            coverage[f"QuantileRegressor/Coverage@{q:.2f}"] = float(c)
+            logging.info(f"QuantileRegressor/Coverage@{q:.2f} {float(c):.4f}")
+
         run.log(
             {
                 "QuantileRegressor/Train_Loss": avg_train_loss,
@@ -173,15 +201,10 @@ if __name__ == "__main__":
                 "QuantileRegressor/Val_MAE_Log": mae_log,
                 "QuantileRegressor/Val_MAE_Lin": mae_lin,
                 "QuantileRegressor/LearningRate": last_lr,
+                **bucket_maes,
+                **coverage,
             }
         )
-        # after computing predictions/targets_log
-        qs = np.array(quantiles, dtype=np.float32)
-        covered = (targets_log[:, None] <= predictions).mean(
-            axis=0
-        )  # fraction ≤ each quantile
-        for q, c in zip(qs, covered):
-            run.log({f"QuantileRegressor/Coverage@{q:.2f}": float(c)})
 
         logging.info(
             f"✓ Regressor Epoch {epoch}: Train Loss {avg_train_loss:.4f}, Val Loss {avg_val_loss:.4f}, MAE Log {mae_log:.4f} MAE Lin {mae_lin:.4f} LearningRate: {last_lr:.4f}"
