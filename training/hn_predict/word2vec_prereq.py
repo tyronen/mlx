@@ -4,14 +4,13 @@ import hashlib
 import json
 import logging
 import os
-import re
 
 import numpy as np
 from datasets import load_dataset
 
 from common import utils
+from common.utils import tokenize_text
 
-TOKEN_RE = re.compile(r"[A-Za-z0-9.+#_]+")
 COMMENT_SAMPLE = 8
 
 
@@ -23,10 +22,8 @@ def tokenize_title_batch(batch):
     append = out.append
     for t, ttl, txt in zip(types, titles, texts):
         s = ttl if t == "story" else (txt if t == "comment" else None)
-        if isinstance(s, str) and s.strip():
-            append(TOKEN_RE.findall(s.lower()))
-        else:
-            append([])
+        append(tokenize_text(s) if isinstance(s, str) and s.strip() else [])
+
     return {"tokens": out}
 
 

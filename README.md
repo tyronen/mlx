@@ -15,17 +15,23 @@ python -m training.train_mnist_cnn --model_path data/mnist_cnn.pth
 
 ## Week 1 - Hacker News Predictor
 
-`python -m training.hn_predict.tokenizer` will tokenize comments and titles into `data/hn_corpus.txt`.
+### On the dev machine
 
-`python -m training.hn_predict.process_items` takes the OpenPipe/HackerNews dataset and backfills a lot of user data - at post time! into it and creates a new file, `data/posts.parquet`. This needs large RAM and disk space but no GPU; best run on a dev machine.
+`python -m training.hn_predict.word2vec_prereq` prepares preliminary word indices used to train title embeddings.
 
-To run the word2vec code, run `python -m training.hn_predict.word2vec` from the command line.
+`python -m training.hn_predict.process_items` takes the OpenPipe/HackerNews dataset and backfills a lot of user data - at post time! into it and creates a new file, `data/posts.parquet`. This needs large RAM and disk space but no GPU.
 
-We can evaluate models side by side with `python -m training.hn_predict.word2vec_eval model1 model2`
+`python -m training.hn_predict.mp_preprocess_data.py` takes the input data (`posts.parquet`) and preprocesses it into large tensor files in both training and test sets. 
 
-`python training/hn_predict/mp_preprocess_data.py` takes the input data (`posts.parquet`) and preprocesses it into large tensor files in both training and test sets.
+These scripts produce two final input files: `train.pt` and `val.pt`. Upload these to your GPU machine.
 
-Then you can run `python training/hn_predict/train_hurdle_model.py` to actually train the model.
+### On the GPU
+
+Run `python -m training.hn_predict.train_hurdle_model` to actually train the model. The best output will be in `data/best_quantile_epoch_n.pth` choose the highest value of `n` from the most recent run. Download this to your deployment machine for inference.
+
+### Inference
+
+`python -m training.hn_predict.inference_preprocess` needs to run to prepare an inference cache. You will also need the model created by the training.
 
 ## UX server
 

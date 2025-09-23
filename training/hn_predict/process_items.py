@@ -4,6 +4,7 @@ from collections import defaultdict
 
 import numpy as np
 import pandas as pd
+import tldextract
 from datasets import load_dataset, concatenate_datasets
 
 from models import hn_predict
@@ -88,9 +89,18 @@ def get_story_author(parent_map, story_author_map, comment_id):
     return story_author_map.get(comment_id)
 
 
+# For p95 of previous, use an expanding quantile per domain
+def expanding_p95(s):
+    # expanding quantile of previous → shift by 1 to exclude current
+    return s.expanding(min_periods=1).quantile(0.95).shift().fillna(0.0)
+
+
 def main(posts_file):
     logging.info(f"Reading items")
     items = load_items_dataframe()
+    logging.info("Converting time cols")
+    if items["time"].dtype != "datetime64[ns]":
+        items["time"] = pd.to_datetime(items["time"], unit="s")
     logging.info(f"Sorting items")
     items = items.sort_values("time").reset_index(drop=True)
     logging.info("Filtering for dead")
@@ -99,6 +109,13 @@ def main(posts_file):
     parent_map = not_dead.set_index("id")["parent"].to_dict()
     logging.info("Filtering for stories")
     stories = not_dead[not_dead["type"] == "story"].set_index("id")
+    logging.info("Normalizing url")
+    stories["norm_url"] = stories["url"].fillna("")
+    mask = ~stories["norm_url"].str.startswith(("http://", "https://"))
+    stories.loc[mask, "norm_url"] = "http://" + stories.loc[mask, "norm_url"]
+    logging.info("Populating domain")
+    extracted = stories["norm_url"].map(lambda u: tldextract.extract(u))
+    stories["domain"] = extracted.map(lambda p: p.domain or "")
     logging.info("Filtering for comments")
     comments = not_dead[not_dead["type"] == "comment"].copy()
     logging.info("Calculating comment length")
@@ -146,6 +163,14 @@ def main(posts_file):
     )
     story_ids = stories_df["id"]
 
+    logging.info("Calculating title heuristics")
+    titles = stories_df["title"].fillna("")
+    stories_df["title_length"] = titles.str.split().map(len).astype(int)
+    title_chars = titles.str.len().replace(0, 1)  # avoid div by zero
+    digit_counts = titles.str.count(r"\d")
+    stories_df["digit_ratio"] = (digit_counts / title_chars).astype(float)
+    stories_df["has_question_mark"] = titles.str.contains(r"\?", regex=True).astype(int)
+
     # 2. Cumulative / prior‑post user statistics ---------------------------
     # ------------------------------------------------------------------
     # Dead‑post stats must consider *all* stories (dead + live).
@@ -155,8 +180,6 @@ def main(posts_file):
     # ------------------------------------------------------------------
     logging.info("Computing dead‑post history from all stories")
     stories_all = items[items["type"] == "story"].sort_values("time").copy()
-    if stories_all["time"].dtype != "datetime64[ns]":
-        stories_all["time"] = pd.to_datetime(stories_all["time"], unit="s")
 
     stories_all["is_dead"] = stories_all["dead"].notna().astype(int)
     all_stories_by_author = stories_all.groupby("by", sort=False)
@@ -179,10 +202,6 @@ def main(posts_file):
     stories_df["first_comment_delay"] = story_ids.map(first_comment_delta).fillna(-1)
     stories_df["tenth_comment_delay"] = story_ids.map(tenth_comment_delta).fillna(-1)
     stories_df["score_above_1"] = (stories_df["score"] > 1).astype(int)
-
-    logging.info("Elapsed time stats")
-    if stories_df["time"].dtype != "datetime64[ns]":
-        stories_df["time"] = pd.to_datetime(stories_df["time"], unit="s")
 
     # 2. Cumulative / prior‑post user statistics ---------------------------
     logging.info("Computing cumulative user statistics")
@@ -267,15 +286,32 @@ def main(posts_file):
         stories_df["by"]
     ).shift()
 
+    logging.info("Adding user's previous mean score feature")
+    cumsum_score = stories_df.groupby("by", sort=False)["score"].cumsum()
+    cumcount_prev = stories_df.groupby("by", sort=False).cumcount()
+    # shift cumsum by 1 so it's sum of previous scores
+    prev_sum = cumsum_score.groupby(stories_df["by"]).shift()
+    stories_df["user_mean_score_previous"] = np.where(
+        cumcount_prev == 0, 0.0, prev_sum / cumcount_prev
+    )
+
     # On a user's very first post every user_* aggregate should be 0
     user_cols = [c for c in stories_df.columns if c.startswith("user_")]
     stories_df[user_cols] = stories_df[user_cols].fillna(0)
 
-    logging.info("Creating author tiers from previous max score")
-    bins = [-1, 0, 10, 100, 500, np.inf]
-    labels = ["new_user", "low_tier", "mid_tier", "high_tier", "power_user"]
-    stories_df["author_tier"] = pd.cut(
-        stories_df["user_max_score_previous"], bins=bins, labels=labels
+    logging.info("Sorting stories")
+    stories_df = stories_df.sort_values("time").reset_index(drop=True)
+
+    logging.info("Adding domain prior score features (mean/p95 of previous)")
+    dom_group = stories_df.groupby("domain", sort=False)
+    dom_cumsum = dom_group["score"].cumsum()
+    dom_count_prev = dom_group.cumcount()
+    stories_df["domain_mean_score_previous"] = np.where(
+        dom_count_prev == 0, 0.0, (dom_cumsum - stories_df["score"]) / dom_count_prev
+    )
+
+    stories_df["domain_p95_score_previous"] = (
+        dom_group["score"].apply(expanding_p95).reset_index(level=0, drop=True)
     )
 
     # 3. Final selection and write‑out -------------------------------------
@@ -292,6 +328,11 @@ def main(posts_file):
         "posts_per_year",
         "days_since_first_post",
         "days_since_last_post",
+        "title_length",
+        "digit_ratio",
+        "has_question_mark",
+        "domain_mean_score_previous",
+        "domain_p95_score_previous",
         # user running aggregates (min/max/mean for each metric)
     ] + [c for c in stories_df.columns if c.startswith("user_")]
     logging.info(f"Output columns: {output_cols}")

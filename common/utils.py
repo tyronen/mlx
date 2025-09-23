@@ -1,15 +1,20 @@
 import logging
+import random
+import re
+import unicodedata
 from contextlib import nullcontext
+
+import numpy as np
 import torch
 from torch.amp import autocast, GradScaler
-import numpy as np
-import random
+
 
 def randomize():
     # Set random seed for reproducibility
     torch.manual_seed(42)
     random.seed(42)
     np.random.seed(42)
+
 
 def setup_logging():
     logging.basicConfig(
@@ -32,3 +37,16 @@ def amp_components(device, train=False):
     else:
         # fall-back: no automatic casting, dummy scaler
         return nullcontext(), GradScaler(enabled=False)
+
+
+TOKEN_RE = re.compile(r"[A-Za-z0-9.+#_]+")
+
+
+def normalize_text(s: str) -> str:
+    # casefold + unicode normalize
+    return unicodedata.normalize("NFKC", s).casefold()
+
+
+def tokenize_text(s: str) -> list[str]:
+    s = normalize_text(s or "")
+    return TOKEN_RE.findall(s)

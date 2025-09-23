@@ -1,5 +1,6 @@
 import gc
 import json
+import logging
 import multiprocessing as mp
 import os
 from collections import Counter
@@ -10,10 +11,11 @@ import tldextract
 import torch
 from tqdm import tqdm
 
-from .helpers import load_embeddings, log_transform_plus1, time_transform
+from common import utils
+from common.utils import tokenize_text
+from models.hn_predict_utils import load_embeddings, log_transform_plus1, time_transform
 
 # global variables to be shared across workers
-global_embedding_matrix = None
 global_w2i = None
 global_Tmin = None
 global_Tmax = None
@@ -24,10 +26,7 @@ global_user_vocab = None
 UNK_TOKEN = "<unk>"
 
 
-def init_worker(
-    embedding_matrix, w2i_dict, Tmin, Tmax, domain_vocab, tld_vocab, user_vocab
-):
-    global global_embedding_matrix
+def init_worker(w2i_dict, Tmin, Tmax, domain_vocab, tld_vocab, user_vocab):
     global global_w2i
     global global_Tmin
     global global_Tmax
@@ -35,7 +34,6 @@ def init_worker(
     global global_tld_vocab
     global global_user_vocab
 
-    global_embedding_matrix = torch.as_tensor(embedding_matrix).clone().detach()
     global_w2i = w2i_dict
     global_Tmin = Tmin
     global_Tmax = Tmax
@@ -95,18 +93,9 @@ def normalize_url(url):
 
 
 def tokenize_title(title_text):
-    tokens = title_text.lower().split()
+    tokens = tokenize_text(title_text)
     token_indices = [global_w2i.get(token, 0) for token in tokens]
     return token_indices
-
-
-def embed_title(token_indices):
-    if len(token_indices) == 0:
-        return torch.zeros(global_embedding_matrix.shape[1])
-    token_indices = torch.tensor(token_indices, dtype=torch.long)
-    embedded = global_embedding_matrix[token_indices]
-    avg_embedding = embedded.mean(dim=0)
-    return avg_embedding.numpy()
 
 
 def process_row(row):
@@ -122,12 +111,11 @@ def process_row(row):
     user_idx = global_user_vocab.get(user, 0)
 
     tokens = tokenize_title(row["title"])
-    emb = embed_title(tokens)
     target = np.clip(row["score"], 0, None)
 
     return {
         "features_num": feats,
-        "embedding": emb,
+        "token_idx": tokens,
         "domain_idx": domain_idx,
         "tld_idx": tld_idx,
         "user_idx": user_idx,
@@ -148,7 +136,6 @@ def prepare_for_16(array32, threshold):
 
 def precompute_parallel(
     df,
-    embedding_matrix,
     w2i_dict,
     domain_vocab,
     tld_vocab,
@@ -172,7 +159,6 @@ def precompute_parallel(
         processes=num_workers,
         initializer=init_worker,
         initargs=(
-            embedding_matrix,
             w2i_dict,
             Tmin,
             Tmax,
@@ -190,7 +176,7 @@ def precompute_parallel(
         )
 
     features_array = np.stack([r["features_num"] for r in results])
-    embeddings_array = np.stack([r["embedding"] for r in results])
+    all_token_idx = [r["token_idx"] for r in results]
     all_targets = torch.tensor([r["target"] for r in results], dtype=torch.float32)
     all_domain_idx = torch.tensor([r["domain_idx"] for r in results], dtype=torch.long)
     all_tld_idx = torch.tensor([r["tld_idx"] for r in results], dtype=torch.long)
@@ -199,14 +185,12 @@ def precompute_parallel(
     gc.collect()
 
     features_array = prepare_for_16(features_array, 25)
-    embeddings_array = prepare_for_16(embeddings_array, 10)
 
     all_features_num = torch.from_numpy(features_array).to(torch.float16)
-    all_embeddings = torch.from_numpy(embeddings_array).to(torch.float16)
 
     return (
         all_features_num,
-        all_embeddings,
+        all_token_idx,
         all_domain_idx,
         all_tld_idx,
         all_user_idx,
@@ -216,13 +200,14 @@ def precompute_parallel(
 
 
 if __name__ == "__main__":
+    utils.setup_logging()
     EMBEDDING_FILE = "data/word2vec_skipgram.pth"
     TRAINING_VOCAB_PATH = "data/train_vocab.json"
     FILEPATH = "data/posts.parquet"
     OUTPUT_DIR = "data"
     NUM_WORKERS = min(8, os.cpu_count() or 8)
 
-    w2i, embedding_matrix = load_embeddings(EMBEDDING_FILE)
+    w2i = load_embeddings(EMBEDDING_FILE)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     df = pd.read_parquet(FILEPATH)
@@ -262,7 +247,7 @@ if __name__ == "__main__":
 
     (
         train_features_num,
-        train_embeddings,
+        train_title_idx,
         train_domain_idx,
         train_tld_idx,
         train_user_idx,
@@ -270,7 +255,6 @@ if __name__ == "__main__":
         train_delta_t,
     ) = precompute_parallel(
         train_df,
-        embedding_matrix,
         w2i,
         domain_vocab,
         tld_vocab,
@@ -282,10 +266,27 @@ if __name__ == "__main__":
         num_workers=NUM_WORKERS,
     )
 
+    oov_counter = Counter()
+    vocab = set(w2i.keys())
+
+    for title in train_df["title"]:
+        toks = tokenize_text(title)
+        oov_counter.update([t for t in toks if t not in vocab])
+
+    total_tokens = sum(len(tokenize_text(t)) for t in train_df["title"])
+    oov_tokens = sum(oov_counter.values())
+    logging.info(
+        f"OOV token rate: {oov_tokens / total_tokens:.3%} over {total_tokens:,} tokens"
+    )
+    logging.info(
+        "Top OOV tokens: "
+        + ", ".join(f"{w}:{c}" for w, c in oov_counter.most_common(20))
+    )
+
     torch.save(
         {
             "features_num": train_features_num,
-            "title_embeddings": train_embeddings,
+            "title_index": train_title_idx,
             "domain_index": train_domain_idx,
             "tld_index": train_tld_idx,
             "user_index": train_user_idx,
@@ -297,7 +298,7 @@ if __name__ == "__main__":
 
     (
         val_features_num,
-        val_embeddings,
+        val_title_idx,
         val_domain_idx,
         val_tld_idx,
         val_user_idx,
@@ -305,7 +306,6 @@ if __name__ == "__main__":
         val_delta_t,
     ) = precompute_parallel(
         val_df,
-        embedding_matrix,
         w2i,
         domain_vocab,
         tld_vocab,
@@ -319,7 +319,7 @@ if __name__ == "__main__":
     torch.save(
         {
             "features_num": val_features_num,
-            "title_embeddings": val_embeddings,
+            "title_index": val_title_idx,
             "domain_index": val_domain_idx,
             "tld_index": val_tld_idx,
             "user_index": val_user_idx,
@@ -329,4 +329,4 @@ if __name__ == "__main__":
         os.path.join(OUTPUT_DIR, "val.pt"),
     )
 
-    print("Precomputation finished!")
+    logging.info("Precomputation finished!")

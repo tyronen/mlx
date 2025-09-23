@@ -7,7 +7,7 @@ class PrecomputedDataset(Dataset):
         data = torch.load(path, map_location="cpu")
 
         self.features_num = data["features_num"].to(torch.float32)
-        self.title_embeddings = data["title_embeddings"].to(torch.float32)
+        self.title_indices = data["title_index"]
         self.domain_indices = data["domain_index"]
         self.tld_indices = data["tld_index"]
         self.user_indices = data["user_index"]
@@ -23,7 +23,7 @@ class PrecomputedDataset(Dataset):
         real_idx = self.valid_indices[idx]
         return (
             self.features_num[real_idx],
-            self.title_embeddings[real_idx],
+            self.title_indices[real_idx],
             self.domain_indices[real_idx],
             self.tld_indices[real_idx],
             self.user_indices[real_idx],
