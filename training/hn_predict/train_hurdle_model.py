@@ -14,6 +14,7 @@ from transformers.optimization import get_cosine_with_min_lr_schedule_with_warmu
 
 from common import utils
 from models.hn_predict import QuantileRegressionModel
+from models.hn_predict_utils import TRAINING_VOCAB_PATH, VOCAB_PATH
 from .dataloader import PrecomputedDataset
 from .helpers import QuantileLoss
 
@@ -28,7 +29,6 @@ DEVICE = utils.get_device()
 
 TRAIN_FILE = "data/train.pt"
 VAL_FILE = "data/val.pt"
-VOCAB_FILE = "data/train_vocab.json"
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.set_float32_matmul_precision("high")
@@ -91,10 +91,10 @@ def main():
     model_dir = "data"
     os.makedirs(model_dir, exist_ok=True)
 
-    with open(VOCAB_FILE, "r") as f:
+    with open(TRAINING_VOCAB_PATH, "r") as f:
         vocabs = json.load(f)
 
-    with open("data/vocab.json", "r") as f:
+    with open(VOCAB_PATH, "r") as f:
         word_vocab = json.load(f)
 
     train_dataset = PrecomputedDataset(TRAIN_FILE)

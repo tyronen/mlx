@@ -4,7 +4,7 @@ import pickle
 
 import pandas as pd
 
-from models.hn_predict import CACHE_FILE
+from models.hn_predict_utils import CACHE_FILE, POSTS_FILE
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
@@ -21,8 +21,8 @@ def save_user_data():
     from `data/posts.parquet` and save it for next time.
     """
     # No cache yet → build it
-    logging.info("Building inference cache …")
-    posts_df = pd.read_parquet("data/posts.parquet")
+    logging.info("Building cache …")
+    posts_df = pd.read_parquet(POSTS_FILE)
     global_Tmin = posts_df["time"].min()
     global_Tmax = posts_df["time"].max()
 

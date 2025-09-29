@@ -79,6 +79,3 @@ class QuantileRegressionModel(nn.Module):
 
         out = self.linear3(x)
         return out  # shape: [batch_size, num_quantiles]
-
-
-CACHE_FILE = "data/inference_cache.pkl"

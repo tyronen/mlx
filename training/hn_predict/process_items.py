@@ -1,4 +1,3 @@
-import argparse
 import logging
 from collections import defaultdict
 
@@ -8,12 +7,10 @@ import tldextract
 from datasets import load_dataset, concatenate_datasets
 
 from models import hn_predict
+from models.hn_predict_utils import POSTS_FILE
 
 SECONDS_PER_DAY = 24 * 60 * 60
 SECONDS_PER_YEAR = 365.25 * SECONDS_PER_DAY
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--posts", default="data/posts.parquet", help="Posts file")
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
@@ -95,7 +92,7 @@ def expanding_p95(s):
     return s.expanding(min_periods=1).quantile(0.95).shift().fillna(0.0)
 
 
-def main(posts_file):
+def main():
     logging.info(f"Reading items")
     items = load_items_dataframe()
     logging.info("Converting time cols")
@@ -339,11 +336,10 @@ def main(posts_file):
 
     post_df = stories_df[output_cols].copy()
 
-    logging.info(f"Writing {posts_file}")
-    post_df.to_parquet(posts_file, index=False)
+    logging.info(f"Writing {POSTS_FILE}")
+    post_df.to_parquet(POSTS_FILE, index=False)
     logging.info(f"Wrote {post_df.shape[0]} posts")
 
 
 if __name__ == "__main__":
-    args = parser.parse_args()
-    main(args.posts)
+    main()

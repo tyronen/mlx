@@ -23,15 +23,5 @@ class HNPostData(BaseModel):
     # add more if helpful
 
 
-class PredictionResponse(BaseModel):
-    prediction: float
-
-
-def make_prediction(input_data):
-    prediction = predictor.predict(input_data)
-    return PredictionResponse(prediction=prediction)
-
-
-# Define the prediction endpoint
 def predict_direct(request: HNPostData):
-    return make_prediction(request)
+    return predictor.predict(request)

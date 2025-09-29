@@ -1,14 +1,10 @@
 import datetime
-import os
 
-import requests
 import streamlit as st
 
 # Import the new helper functions
-from .hn_predict_api import get_item, fetch_random_recent_story
-
-# --- Configuration ---
-FASTAPI_URL = os.getenv("FASTAPI_URL", "http://127.0.0.1:8000")
+from ui.hn_predict.hn_api import get_item, fetch_random_recent_story
+from ui.hn_predict.predict import predict_direct, HNPostData
 
 # --- Initialize Session State ---
 if "id" not in st.session_state:
@@ -33,6 +29,28 @@ st.title("Hacker News Post Scorer")
 # --- Section 1: Fetching Data ---
 st.header("1. Fetch Post Data")
 st.write("Enter an ID or fetch a random recent post to populate the fields below.")
+
+# --- Fetch Random ---
+st.subheader("Fetch Random Recent Post")
+if st.button("Fetch and Populate Random"):
+    with st.spinner("Searching for a random recent story..."):
+        item_data = fetch_random_recent_story()
+        if item_data:
+            st.session_state.id = item_data.get("id")
+            st.session_state.by = item_data.get("by", "")
+            st.session_state.title = item_data.get("title", "")
+            st.session_state.url = item_data.get("url", "")
+            st.session_state.time_obj = datetime.datetime.fromtimestamp(
+                item_data.get("time", 0)
+            )
+            st.session_state.score = item_data.get("score", 0)
+            st.session_state.comments = item_data.get("descendants", 0)
+            st.success(
+                f"Successfully populated form with data for random post ID {item_data.get('id')}."
+            )
+        else:
+            st.error("Could not find a random recent story. Please try again.")
+            st.session_state.score, st.session_state.comments = None, None
 
 # --- Fetch by ID ---
 st.subheader("Fetch by ID")
@@ -65,27 +83,6 @@ with col2:
                 st.warning(f"Item {item_id_input} is not a story or was not found.")
                 st.session_state.score, st.session_state.comments = None, None
 
-# --- Fetch Random ---
-st.subheader("Fetch Random Recent Post")
-if st.button("Fetch and Populate Random"):
-    with st.spinner("Searching for a random recent story..."):
-        item_data = fetch_random_recent_story()
-        if item_data:
-            st.session_state.id = item_data.get("id")
-            st.session_state.by = item_data.get("by", "")
-            st.session_state.title = item_data.get("title", "")
-            st.session_state.url = item_data.get("url", "")
-            st.session_state.time_obj = datetime.datetime.fromtimestamp(
-                item_data.get("time", 0)
-            )
-            st.session_state.score = item_data.get("score", 0)
-            st.session_state.comments = item_data.get("descendants", 0)
-            st.success(
-                f"Successfully populated form with data for random post ID {item_data.get('id')}."
-            )
-        else:
-            st.error("Could not find a random recent story. Please try again.")
-            st.session_state.score, st.session_state.comments = None, None
 
 # Display metrics if they exist in the session state
 if st.session_state.score is not None:
@@ -115,7 +112,7 @@ time_stamp = int(datetime_obj.timestamp())
 st.write(f"_Final Unix Timestamp for API: `{time_stamp}`_")
 
 if st.button("Predict Score"):
-    payload = {
+    payload: HNPostData = {
         "by": by_input,
         "title": title_input,
         "url": url_input,
@@ -123,16 +120,9 @@ if st.button("Predict Score"):
     }
     try:
         with st.spinner("Getting prediction..."):
-            response = requests.post(f"{FASTAPI_URL}/predict/direct", json=payload)
-            response.raise_for_status()
-            prediction_data = response.json()
+            prediction = predict_direct(payload)
             st.success("Prediction successful!")
-            st.write(f"**Predicted Score:** `{prediction_data['prediction']}`")
+            st.write(f"**Predictiona:** {prediction}")
 
-            with st.expander("See Raw JSON Response"):
-                st.json(prediction_data)
-
-    except requests.exceptions.RequestException as e:
-        st.error(f"An error occurred while connecting to the API: {e}")
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")

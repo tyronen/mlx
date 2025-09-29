@@ -13,7 +13,15 @@ from tqdm import tqdm
 
 from common import utils
 from common.utils import tokenize_text
-from models.hn_predict_utils import load_embeddings, log_transform_plus1, time_transform
+from models.hn_predict_utils import (
+    EMBEDDING_FILE,
+    POSTS_FILE,
+    SCALER_PATH,
+    TRAINING_VOCAB_PATH,
+    load_embeddings,
+    load_user_data,
+    process_row,
+)
 
 # global variables to be shared across workers
 global_w2i = None
@@ -22,17 +30,21 @@ global_Tmax = None
 global_domain_vocab = None
 global_tld_vocab = None
 global_user_vocab = None
+global_feature_columns = None
 
 UNK_TOKEN = "<unk>"
 
 
-def init_worker(w2i_dict, Tmin, Tmax, domain_vocab, tld_vocab, user_vocab):
+def init_worker(
+    w2i_dict, Tmin, Tmax, domain_vocab, tld_vocab, user_vocab, feature_columns
+):
     global global_w2i
     global global_Tmin
     global global_Tmax
     global global_domain_vocab
     global global_tld_vocab
     global global_user_vocab
+    global global_feature_columns
 
     global_w2i = w2i_dict
     global_Tmin = Tmin
@@ -40,6 +52,7 @@ def init_worker(w2i_dict, Tmin, Tmax, domain_vocab, tld_vocab, user_vocab):
     global_domain_vocab = domain_vocab
     global_tld_vocab = tld_vocab
     global_user_vocab = user_vocab
+    global_feature_columns = feature_columns
 
 
 def build_vocab(values, min_freq=1, topk=None):
@@ -54,35 +67,6 @@ def build_vocab(values, min_freq=1, topk=None):
     return vocab
 
 
-def extract_features(row):
-    # Time features
-    year, hour_angle, dow_angle, day_angle = time_transform(row["time"])
-    year_norm = (year - global_Tmin.year) / (global_Tmax.year - global_Tmin.year)
-
-    time_feats = [
-        year_norm,
-        np.sin(hour_angle),
-        np.cos(hour_angle),
-        np.sin(dow_angle),
-        np.cos(dow_angle),
-        np.sin(day_angle),
-        np.cos(day_angle),
-        log_transform_plus1(row["num_posts"]),
-    ]
-
-    # Collect all remaining user features (everything except those handled above
-    user_feature_names = [
-        col
-        for col in row.keys()
-        if col not in ["by", "time", "title", "score", "url", "num_posts"]
-    ]
-
-    user_feats = [row[col] for col in user_feature_names]
-
-    all_features = np.array(time_feats + user_feats, dtype=np.float32)
-    return all_features
-
-
 def normalize_url(url):
     if url is None or not str(url).strip():
         return "http://empty"
@@ -92,35 +76,17 @@ def normalize_url(url):
     return url
 
 
-def tokenize_title(title_text):
-    tokens = tokenize_text(title_text)
-    token_indices = [global_w2i.get(token, 0) for token in tokens]
-    return token_indices
-
-
-def process_row(row):
-
-    feats = extract_features(row)
-    url = normalize_url(row["url"])
-    domain = tldextract.extract(url).domain or ""
-    tld = tldextract.extract(url).suffix or ""
-    user = row["by"] or ""
-
-    domain_idx = global_domain_vocab.get(domain, 0)
-    tld_idx = global_tld_vocab.get(tld, 0)
-    user_idx = global_user_vocab.get(user, 0)
-
-    tokens = tokenize_title(row["title"])
-    target = np.clip(row["score"], 0, None)
-
-    return {
-        "features_num": feats,
-        "token_idx": tokens,
-        "domain_idx": domain_idx,
-        "tld_idx": tld_idx,
-        "user_idx": user_idx,
-        "target": target,
-    }
+def mp_row(row):
+    return process_row(
+        row,
+        global_Tmin,
+        global_Tmax,
+        global_feature_columns,
+        global_w2i,
+        global_domain_vocab,
+        global_tld_vocab,
+        global_user_vocab,
+    )
 
 
 def prepare_for_16(array32, threshold):
@@ -131,6 +97,13 @@ def prepare_for_16(array32, threshold):
     # z-score + clip to fp16-friendly range
     array32 = (array32 - feat_mean) / feat_std
     np.clip(array32, -threshold, threshold, out=array32)
+
+    np.savez(
+        SCALER_PATH,
+        mean=feat_mean.astype(np.float32),
+        std=feat_std.astype(np.float32),
+        threshold=np.array([threshold], dtype=np.float32),
+    )
     return array32
 
 
@@ -140,8 +113,9 @@ def precompute_parallel(
     domain_vocab,
     tld_vocab,
     user_vocab,
-    Tmin=None,
-    Tmax=None,
+    feature_columns,
+    Tmin,
+    Tmax,
     ref_time=None,
     compute_delta_t=False,
     num_workers=None,
@@ -165,11 +139,12 @@ def precompute_parallel(
             domain_vocab,
             tld_vocab,
             user_vocab,
+            feature_columns,
         ),
     ) as pool:
         results = list(
             tqdm(
-                pool.imap_unordered(process_row, df.to_dict(orient="records")),
+                pool.imap_unordered(mp_row, df.to_dict(orient="records")),
                 total=len(df),
                 desc="Precomputing",
             )
@@ -199,18 +174,17 @@ def precompute_parallel(
     )
 
 
-if __name__ == "__main__":
+def main():
     utils.setup_logging()
-    EMBEDDING_FILE = "data/word2vec_skipgram.pth"
-    TRAINING_VOCAB_PATH = "data/train_vocab.json"
-    FILEPATH = "data/posts.parquet"
     OUTPUT_DIR = "data"
     NUM_WORKERS = min(8, os.cpu_count() or 8)
 
     w2i = load_embeddings(EMBEDDING_FILE)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    df = pd.read_parquet(FILEPATH)
+    _, _, Tmin, Tmax, feature_columns = load_user_data()
+
+    df = pd.read_parquet(POSTS_FILE)
     df = df.drop(["id"], axis=1)
     df = df.sort_values(by="time").reset_index(drop=True)
     df = df.dropna()
@@ -220,8 +194,6 @@ if __name__ == "__main__":
     val_df = df.iloc[train_size:]
 
     T_ref = train_df["time"].max()
-    Tmin = train_df["time"].min()
-    Tmax = train_df["time"].max()
 
     domains = [
         tldextract.extract(normalize_url(url)).domain or "" for url in train_df["url"]
@@ -259,6 +231,7 @@ if __name__ == "__main__":
         domain_vocab,
         tld_vocab,
         user_vocab,
+        feature_columns,
         Tmin=Tmin,
         Tmax=Tmax,
         ref_time=T_ref,
@@ -330,3 +303,7 @@ if __name__ == "__main__":
     )
 
     logging.info("Precomputation finished!")
+
+
+if __name__ == "__main__":
+    main()

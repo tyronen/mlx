@@ -17,11 +17,13 @@ python -m training.train_mnist_cnn --model_path data/mnist_cnn.pth
 
 ### On the dev machine
 
-`python -m training.hn_predict.word2vec_prereq` prepares preliminary word indices used to train title embeddings.
+`python -m training.hn_predict.prepare_vocab` prepares preliminary word indices used to train title embeddings.
 
 `python -m training.hn_predict.process_items` takes the OpenPipe/HackerNews dataset and backfills a lot of user data - at post time! into it and creates a new file, `data/posts.parquet`. This needs large RAM and disk space but no GPU.
 
-`python -m training.hn_predict.mp_preprocess_data.py` takes the input data (`posts.parquet`) and preprocesses it into large tensor files in both training and test sets. 
+`python -m training.hn_predict.build_cache` needs to run to prepare a cache used both at the next step and at inference.
+
+`python -m training.hn_predict.mp_preprocess_data` takes the input data and cache and preprocesses it into large tensor files in both training and test sets.
 
 These scripts produce two final input files: `train.pt` and `val.pt`. Upload these to your GPU machine.
 
@@ -31,15 +33,13 @@ Run `python -m training.hn_predict.train_hurdle_model` to actually train the mod
 
 ### Inference
 
-`python -m training.hn_predict.inference_preprocess` needs to run to prepare an inference cache. You will also need the model created by the training.
-
 ## UX server
 
 A simple server environment like AWS Lightsail will do the job.
 
 1. Install Docker Engine on your server. Docker should be runnable by someone other than root. Follow the instructions on the Docker website.
 2. Docker Desktop on your dev machine must have containerd enabled.
-2. Create a file `.env.prod` on the server containing:
+3. Create a file `.env.prod` on the server containing:
 
 ```
 RUNPOD_API_KEY=<your RunPod api key>
@@ -60,10 +60,8 @@ export ENV=./.env.dev
 scp ui_prod.sh <server>:ui_prod.sh
 ```
 
-
 5. Start on your server:
 
 ```
 ./ui_prod.sh
 ```
-

@@ -3,47 +3,28 @@ import logging
 import os
 import pickle
 
+import numpy as np
 import torch
 
+from common import utils
 from models import hn_predict_utils
 from models.hn_predict import QuantileRegressionModel, CACHE_FILE
+from models.hn_predict_utils import EMBEDDING_FILE, SCALER_PATH, load_user_data
 
 REGRESSOR_PATH = os.getenv("REGRESSION_MODEL_PATH", "data/best_quantile_epoch_4.pth")
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
-)
-
-
-def load_user_data():
-    with open(CACHE_FILE, "rb") as fh:
-        cache = pickle.load(fh)
-
-    # propagate globals so hn_predict_utils.process_row has the right reference frame
-    hn_predict_utils.global_Tmin = cache["global_Tmin"]
-    hn_predict_utils.global_Tmax = cache["global_Tmax"]
-
-    logging.info(
-        f"Loaded inference cache with {len(cache['user_features'])} users "
-        f"from {CACHE_FILE}"
-    )
-    return cache["columns"], cache["user_features"]
+utils.setup_logging()
 
 
 def get_full_model_preprocessor():
     """Load necessary data"""
-    w2i, embedding_matrix = hn_predict_utils.load_embeddings(
-        "skipgram_models/silvery200.pt"
-    )
+    w2i = hn_predict_utils.load_embeddings(EMBEDDING_FILE)
     hn_predict_utils.global_w2i = w2i
-    hn_predict_utils.global_embedding_matrix = embedding_matrix
     # Load vocab sizes from vocab file
     with open(hn_predict_utils.TRAINING_VOCAB_PATH, "r") as f:
         vocabs = json.load(f)
 
-    hn_predict_utils.global_domain_vocab = vocabs["domain_vocab"]
-    hn_predict_utils.global_tld_vocab = vocabs["tld_vocab"]
-    hn_predict_utils.global_user_vocab = vocabs["user_vocab"]
+    return w2i, vocabs["domain_vocab"], vocabs["tld_vocab"], vocabs["user_vocab"]
 
 
 def load_regressor_model() -> QuantileRegressionModel:
@@ -57,8 +38,17 @@ def load_regressor_model() -> QuantileRegressionModel:
 
 class RegressorModelPredictor:
     def __init__(self, regressor):
-        self.columns, self.user_features = load_user_data()
+        self.w2i, self.domain_vocab, self.tld_vocab, self.user_vocab = (
+            get_full_model_preprocessor()
+        )
+        self.columns, self.user_features, self.Tmin, self.Tmax, self.feature_columns = (
+            load_user_data()
+        )
         self.regressor = regressor
+        sc = np.load(SCALER_PATH)
+        self.feat_mean = torch.from_numpy(sc["mean"]).float().unsqueeze(0)  # [1, D]
+        self.feat_std = torch.from_numpy(sc["std"]).float().unsqueeze(0)  # [1, D]
+        self.clip_thr = float(sc["threshold"][0])
 
     def preprocess_input(self, data: dict) -> list[float]:
         # Get user features from memory (instant lookup)
@@ -78,40 +68,58 @@ class RegressorModelPredictor:
 
     def get_tensors(self, input_data: dict):
         features_vec = self.preprocess_input(input_data)
-        print(features_vec)
-        data = hn_predict_utils.process_row(features_vec)
+        logging.info(f"Features vec: {features_vec}")
+        data = hn_predict_utils.process_row(
+            features_vec,
+            self.Tmin,
+            self.Tmax,
+            self.feature_columns,
+            self.w2i,
+            self.domain_vocab,
+            self.tld_vocab,
+            self.user_vocab,
+        )
+        logging.info(f"Data: {data}")
         features_num = torch.tensor(
             data["features_num"], dtype=torch.float32
         ).unsqueeze(0)
-        # Load title embeddings (precomputed)
-        title_embeddings = torch.tensor(
-            data["embedding"], dtype=torch.float32
-        ).unsqueeze(0)
+        features_num = (features_num - self.feat_mean) / self.feat_std
+        features_num.clamp_(-self.clip_thr, self.clip_thr)
+
+        title_indices = torch.tensor(data["token_idx"], dtype=torch.long)
+        if title_indices.numel() == 0:
+            title_indices = torch.zeros(1, dtype=torch.long)  # ensure at least [0]
+        title_indices = title_indices.unsqueeze(0)
 
         # Load categorical indices
         domain_indices = torch.tensor([data["domain_idx"]], dtype=torch.long)
         tld_indices = torch.tensor([data["tld_idx"]], dtype=torch.long)
         user_indices = torch.tensor([data["user_idx"]], dtype=torch.long)
-        return features_num, title_embeddings, domain_indices, tld_indices, user_indices
+        return features_num, title_indices, domain_indices, tld_indices, user_indices
 
     def predict(self, input_data: dict) -> float:
-        features_num, title_embeddings, domain_indices, tld_indices, user_indices = (
+        logging.info("Getting tensors")
+        features_num, title_indices, domain_indices, tld_indices, user_indices = (
             self.get_tensors(input_data)
         )
         self.regressor.eval()
         with torch.no_grad():
-            nonzero_mask = True
-
-            features_num_nz = features_num[nonzero_mask]
-            title_emb_nz = title_embeddings[nonzero_mask]
-            domain_idx_nz = domain_indices[nonzero_mask]
-            tld_idx_nz = tld_indices[nonzero_mask]
-            user_idx_nz = user_indices[nonzero_mask]
-
+            logging.info("Calling model")
             reg_output = self.regressor(
-                features_num_nz, title_emb_nz, domain_idx_nz, tld_idx_nz, user_idx_nz
+                features_num, title_indices, domain_indices, tld_indices, user_indices
             )
-            return reg_output[2].item()
+            q_log = reg_output[0].sort().values  # enforce monotonicity
+            q_lin = torch.exmp1(q_log)
+            logging.info(
+                "Output: num[min,max]=[%.2f, %.2f] | title_len=%d | q[min,max]=[%.1f, %.1f]",
+                features_num.min().item(),
+                features_num.max().item(),
+                title_indices.size(1),
+                q_lin.min().item(),
+                q_lin.max().item(),
+            )
+            median = q_lin[len(q_lin) // 2].item()
+            return {"median": float(median), "quantiles": [float(x) for x in q_lin]}
 
 
 def get_predictor():

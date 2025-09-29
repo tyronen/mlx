@@ -10,6 +10,7 @@ from datasets import load_dataset
 
 from common import utils
 from common.utils import tokenize_text
+from models.hn_predict_utils import VOCAB_PATH
 
 COMMENT_SAMPLE = 8
 
@@ -101,7 +102,6 @@ def main():
     # 5) Pass 3: write indices (memmap) and counts array (aligned to vocab)
     idx_path = os.path.join(args.out_dir, "indices.int32.npy")
     counts_path = os.path.join(args.out_dir, "counts.int64.npy")
-    vocab_path = os.path.join(args.out_dir, "vocab.json")
     ix2_path = os.path.join(args.out_dir, "ix_to_word.json")
 
     # counts aligned to vocab order in O(1) using reindex
@@ -113,7 +113,7 @@ def main():
     indices.flush()
     np.save(counts_path, counts, allow_pickle=False)
 
-    with open(vocab_path, "w", encoding="utf-8") as f:
+    with open(VOCAB_PATH, "w", encoding="utf-8") as f:
         json.dump(word_to_ix, f, ensure_ascii=False)
 
     with open(ix2_path, "w", encoding="utf-8") as f:
@@ -122,7 +122,7 @@ def main():
     logging.info("✅ Wrote:")
     logging.info(idx_path)
     logging.info(counts_path)
-    logging.info(vocab_path)
+    logging.info(VOCAB_PATH)
     logging.info(ix2_path)
 
 
