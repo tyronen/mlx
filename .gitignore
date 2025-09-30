@@ -11,7 +11,8 @@ sweeps/
 logs/
 chunks/
 node_modules/
-
+.vscode/
+pyrightconfig.json
 *.orig
 *.rej
 *.aria2
