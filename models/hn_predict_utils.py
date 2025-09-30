@@ -1,12 +1,11 @@
 # pyright: reportAttributeAccessIssue=false
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import pickle
 
 import numpy as np
 import pandas as pd
 import tldextract
-import torch
 
 from common import utils
 
@@ -63,8 +62,9 @@ def log_transform_plus1(x):
 
 
 def time_transform(time):
+    # Ensure epoch seconds are interpreted in UTC to match training
     if isinstance(time, (int, float)):
-        timestamp = datetime.fromtimestamp(time)
+        timestamp = datetime.fromtimestamp(time, timezone.utc)
     else:
         timestamp = time
 
@@ -135,6 +135,7 @@ def normalize_url(url):
 
 
 def tokenize_title(w2i, title_text):
-    tokens = title_text.lower().split()
+    # Use the same tokenizer used to build the vocab
+    tokens = utils.tokenize_text(title_text or "")
     token_indices = [w2i.get(token, 0) for token in tokens]
     return token_indices
