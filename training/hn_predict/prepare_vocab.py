@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportIndexIssue=false
 import argparse
 import hashlib
 import json
@@ -54,8 +54,9 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     # 1) Load minimal columns
     ds = load_dataset("OpenPipe/hacker-news", split="train")
-    keep = [c for c in ("type", "title", "text", "id") if c in ds.column_names]
-    ds = ds.remove_columns([c for c in ds.column_names if c not in keep])
+    cols = ds.column_names or []
+    keep = [c for c in ("type", "title", "text", "id") if c in cols]
+    ds = ds.remove_columns([c for c in cols if c not in keep])
     ds = ds.filter(keep_row)
 
     # 2) Tokenize in parallel (cached on disk by HF)

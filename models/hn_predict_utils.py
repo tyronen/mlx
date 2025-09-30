@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 import logging
 from datetime import datetime
 import pickle
@@ -52,13 +53,6 @@ def load_data(items_file, users_file):
         has_title["title"].str.strip().astype(bool)
     ]  # drop empty or whitespace-only
     return has_title.drop(columns=["id"])
-
-
-def load_embeddings(embeddings_file):
-    edict = torch.load(embeddings_file, weights_only=True)
-    word_to_ix = edict["word_to_ix"]
-    word_to_ix["UNK"] = 0
-    return word_to_ix
 
 
 def log_transform_plus1(x):

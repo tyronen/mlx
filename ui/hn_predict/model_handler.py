@@ -1,34 +1,39 @@
 import json
 import logging
 import os
-import pickle
 
 import numpy as np
 import torch
 
 from common import utils
 from models import hn_predict_utils
-from models.hn_predict import QuantileRegressionModel, CACHE_FILE
-from models.hn_predict_utils import EMBEDDING_FILE, SCALER_PATH, load_user_data
+from models.hn_predict import QuantileRegressionModel
+from models.hn_predict_utils import (
+    SCALER_PATH,
+    load_user_data,
+)
 
-REGRESSOR_PATH = os.getenv("REGRESSION_MODEL_PATH", "data/best_quantile_epoch_4.pth")
+REGRESSOR_PATH = os.getenv("REGRESSION_MODEL_PATH", "data/best_quantile.pth")
 
 utils.setup_logging()
 
 
 def get_full_model_preprocessor():
     """Load necessary data"""
-    w2i = hn_predict_utils.load_embeddings(EMBEDDING_FILE)
-    hn_predict_utils.global_w2i = w2i
-    # Load vocab sizes from vocab file
+    # Use the same vocab mapping as used during training
+    with open(hn_predict_utils.VOCAB_PATH, "r") as f:
+        w2i = json.load(f)
+    if "UNK" not in w2i:
+        w2i["UNK"] = 0
+
+    # Load categorical vocabs
     with open(hn_predict_utils.TRAINING_VOCAB_PATH, "r") as f:
         vocabs = json.load(f)
 
     return w2i, vocabs["domain_vocab"], vocabs["tld_vocab"], vocabs["user_vocab"]
 
 
-def load_regressor_model() -> QuantileRegressionModel:
-    regressor_ckpt = torch.load(REGRESSOR_PATH, map_location="cpu")
+def load_regressor_model(regressor_ckpt: dict) -> QuantileRegressionModel:
     regressor_config = regressor_ckpt["config"]
     regressor = QuantileRegressionModel(**regressor_config)
     regressor.load_state_dict(regressor_ckpt["model_state_dict"])
@@ -37,20 +42,24 @@ def load_regressor_model() -> QuantileRegressionModel:
 
 
 class RegressorModelPredictor:
-    def __init__(self, regressor):
+    def __init__(self):
+
         self.w2i, self.domain_vocab, self.tld_vocab, self.user_vocab = (
             get_full_model_preprocessor()
         )
         self.columns, self.user_features, self.Tmin, self.Tmax, self.feature_columns = (
             load_user_data()
         )
-        self.regressor = regressor
+        regressor_ckpt = torch.load(REGRESSOR_PATH, map_location="cpu")
+        logging.info(f"Torch file has: {list(regressor_ckpt.keys())}")
+        self.regressor = load_regressor_model(regressor_ckpt)
+        self.quantile_probs = regressor_ckpt["quantile_probs"]
         sc = np.load(SCALER_PATH)
         self.feat_mean = torch.from_numpy(sc["mean"]).float().unsqueeze(0)  # [1, D]
         self.feat_std = torch.from_numpy(sc["std"]).float().unsqueeze(0)  # [1, D]
         self.clip_thr = float(sc["threshold"][0])
 
-    def preprocess_input(self, data: dict) -> list[float]:
+    def preprocess_input(self, data: dict):
         # Get user features from memory (instant lookup)
         username = data["by"]
         if username in self.user_features:
@@ -97,7 +106,7 @@ class RegressorModelPredictor:
         user_indices = torch.tensor([data["user_idx"]], dtype=torch.long)
         return features_num, title_indices, domain_indices, tld_indices, user_indices
 
-    def predict(self, input_data: dict) -> float:
+    def predict(self, input_data: dict):
         logging.info("Getting tensors")
         features_num, title_indices, domain_indices, tld_indices, user_indices = (
             self.get_tensors(input_data)
@@ -108,8 +117,16 @@ class RegressorModelPredictor:
             reg_output = self.regressor(
                 features_num, title_indices, domain_indices, tld_indices, user_indices
             )
-            q_log = reg_output[0].sort().values  # enforce monotonicity
-            q_lin = torch.exmp1(q_log)
+            q_log = reg_output[0]
+            q_log = torch.cummax(q_log, dim=0).values
+            q_lin = torch.expm1(q_log)
+            lo_idx = max(i for i, q in enumerate(self.quantile_probs) if q <= 0.5)
+            hi_idx = min(i for i, q in enumerate(self.quantile_probs) if q >= 0.5)
+            p_lo, p_hi = self.quantile_probs[lo_idx], self.quantile_probs[hi_idx]
+            y_lo, y_hi = q_log[lo_idx], q_log[hi_idx]
+            t = (0.5 - p_lo) / max(1e-6, (p_hi - p_lo))
+            median_log = y_lo + t * (y_hi - y_lo)
+
             logging.info(
                 "Output: num[min,max]=[%.2f, %.2f] | title_len=%d | q[min,max]=[%.1f, %.1f]",
                 features_num.min().item(),
@@ -118,10 +135,9 @@ class RegressorModelPredictor:
                 q_lin.min().item(),
                 q_lin.max().item(),
             )
-            median = q_lin[len(q_lin) // 2].item()
+            median = torch.expm1(median_log).item()
             return {"median": float(median), "quantiles": [float(x) for x in q_lin]}
 
 
 def get_predictor():
-    regressor = load_regressor_model()
-    return RegressorModelPredictor(regressor)
+    return RegressorModelPredictor()

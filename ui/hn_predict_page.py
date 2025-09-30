@@ -112,12 +112,12 @@ time_stamp = int(datetime_obj.timestamp())
 st.write(f"_Final Unix Timestamp for API: `{time_stamp}`_")
 
 if st.button("Predict Score"):
-    payload: HNPostData = {
-        "by": by_input,
-        "title": title_input,
-        "url": url_input,
-        "time": time_stamp,
-    }
+    payload = HNPostData(
+        by=by_input,
+        title=title_input,
+        url=url_input,
+        time=time_stamp,
+    )
     try:
         with st.spinner("Getting prediction..."):
             prediction = predict_direct(payload)

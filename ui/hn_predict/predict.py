@@ -24,4 +24,4 @@ class HNPostData(BaseModel):
 
 
 def predict_direct(request: HNPostData):
-    return predictor.predict(request)
+    return predictor.predict(request.model_dump())

@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false
 import logging
 from collections import defaultdict
 

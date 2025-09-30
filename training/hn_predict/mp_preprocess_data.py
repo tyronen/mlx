@@ -14,11 +14,10 @@ from tqdm import tqdm
 from common import utils
 from common.utils import tokenize_text
 from models.hn_predict_utils import (
-    EMBEDDING_FILE,
+    VOCAB_PATH,
     POSTS_FILE,
     SCALER_PATH,
     TRAINING_VOCAB_PATH,
-    load_embeddings,
     load_user_data,
     process_row,
 )
@@ -179,7 +178,10 @@ def main():
     OUTPUT_DIR = "data"
     NUM_WORKERS = min(8, os.cpu_count() or 8)
 
-    w2i = load_embeddings(EMBEDDING_FILE)
+    with open(VOCAB_PATH, "r") as f:
+        w2i = json.load(f)
+    if "UNK" not in w2i:
+        w2i["UNK"] = 0
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     _, _, Tmin, Tmax, feature_columns = load_user_data()
@@ -283,6 +285,7 @@ def main():
         domain_vocab,
         tld_vocab,
         user_vocab,
+        feature_columns,
         Tmin=Tmin,
         Tmax=Tmax,
         compute_delta_t=False,

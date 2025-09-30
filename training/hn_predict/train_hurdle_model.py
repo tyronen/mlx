@@ -21,7 +21,7 @@ from .helpers import QuantileLoss
 hyperparameters = {
     "scale": 4,
     "batch_size": 8192,
-    "epochs": 8,
+    "epochs": 5,
     "learning_rate": 1e-3,
     "text_learning_rate": 3e-3,
 }
@@ -85,10 +85,12 @@ def make_data_loader(dataset, shuffle):
     )
 
 
+model_dir = "data"
+
+
 def main():
     utils.setup_logging()
     logging.info("Starting run")
-    model_dir = "data"
     os.makedirs(model_dir, exist_ok=True)
 
     with open(TRAINING_VOCAB_PATH, "r") as f:
@@ -189,7 +191,7 @@ def main():
         targets = []
 
         with torch.no_grad():
-            for batch in tqdm(val_dataloader, desc=f"Epoch {epoch} ®[Val]"):
+            for batch in tqdm(val_dataloader, desc=f"Epoch {epoch} [Val]"):
                 features_num, title_emb, domain_idx, tld_idx, user_idx, target = [
                     b.to(DEVICE, non_blocking=True) for b in batch
                 ]
@@ -209,11 +211,12 @@ def main():
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            model_path = os.path.join(model_dir, f"best_quantile_epoch_{epoch}.pth")
+            model_path = os.path.join(model_dir, f"best_quantile.pth")
             torch.save(
                 {
                     "model_state_dict": regressor.state_dict(),
                     "config": config,
+                    "quantile_probs": quantile_probs,
                 },
                 model_path,
             )
@@ -255,8 +258,7 @@ def main():
             "B3 (4–6)": (4, 6, 0.08),  # 0.09
             "B4 (7–16)": (7, 16, 0.08),  # 0.06
             "B5 (17–99)": (17, 99, 0.09),  # 0.07
-            "B6 (100–199)": (100, 199, 0.08),  # 0.06
-            "B7 (≥200)": (200, np.inf, 0.03),  # 0.01
+            "B6 (≥100)": (100, np.inf, 0.11),  # 0.08
         }
 
         bucket_maes = {}
@@ -298,7 +300,10 @@ def main():
         )
 
     run.finish(0)
+    plot_predictions(median_lin_preds, targets_lin)
 
+
+def plot_predictions(median_lin_preds, targets_lin):
     ### ---------- PLOTTING ----------
     logging.info("Generating prediction vs. actual plot...")
 
@@ -315,7 +320,7 @@ def main():
     )  # Use alpha for overplotting
 
     # Add a line for reference (perfect prediction)
-    max_val = max(targets_to_plot.max(), preds_to_plot.max())
+    max_val = max(targets_to_plot.max().item(), preds_to_plot.max().item())
     plt.plot(
         [1, max_val + 1],
         [1, max_val + 1],
