@@ -24,50 +24,33 @@ if "comments" not in st.session_state:
 
 # --- Streamlit UI ---
 
+# Hide spinner arrows on number inputs
+st.markdown(
+    """
+<style>
+    /* Hide number input step buttons */
+    button[data-testid="stNumberInputStepDown"],
+    button[data-testid="stNumberInputStepUp"] {
+        display: none !important;
+    }
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 st.title("Hacker News Post Scorer")
 
 # --- Section 1: Fetching Data ---
-st.header("1. Fetch Post Data")
-st.write("Enter an ID or fetch a random recent post to populate the fields below.")
+st.write("Fetch a random recent post or enter an ID to populate the fields below.")
 
-# --- Fetch Random ---
-st.subheader("Fetch Random Recent Post")
-if st.button("Fetch and Populate Random"):
-    with st.spinner("Searching for a random recent story..."):
-        item_data = fetch_random_recent_story()
-        if item_data:
-            st.session_state.id = item_data.get("id")
-            st.session_state.by = item_data.get("by", "")
-            st.session_state.title = item_data.get("title", "")
-            st.session_state.url = item_data.get("url", "")
-            st.session_state.time_obj = datetime.datetime.fromtimestamp(
-                item_data.get("time", 0)
-            )
-            st.session_state.score = item_data.get("score", 0)
-            st.session_state.comments = item_data.get("descendants", 0)
-            st.success(
-                f"Successfully populated form with data for random post ID {item_data.get('id')}."
-            )
-        else:
-            st.error("Could not find a random recent story. Please try again.")
-            st.session_state.score, st.session_state.comments = None, None
-
-# --- Fetch by ID ---
-st.subheader("Fetch by ID")
-col1, col2 = st.columns([3, 2])
-with col1:
-    item_id_input = st.number_input(
-        "Hacker News Post ID",
-        min_value=1,
-        value=st.session_state["id"],
-        step=1,
-        label_visibility="collapsed",
-    )
-with col2:
-    if st.button("Fetch and Populate"):
-        with st.spinner(f"Fetching data for item {item_id_input}..."):
-            item_data = get_item(item_id_input)
-            if item_data and item_data.get("type") == "story":
+random_col, id_col = st.columns(2)
+with random_col:
+    st.subheader("Random Recent Post")
+    if st.button("Fetch and Populate Random"):
+        with st.spinner("Searching for a random recent story..."):
+            item_data = fetch_random_recent_story()
+            if item_data:
+                st.session_state.id = item_data.get("id")
                 st.session_state.by = item_data.get("by", "")
                 st.session_state.title = item_data.get("title", "")
                 st.session_state.url = item_data.get("url", "")
@@ -77,52 +60,115 @@ with col2:
                 st.session_state.score = item_data.get("score", 0)
                 st.session_state.comments = item_data.get("descendants", 0)
                 st.success(
-                    f"Successfully populated form with data for ID {item_id_input}."
+                    f"Successfully populated form with data for random post ID {item_data.get('id')}."
                 )
             else:
-                st.warning(f"Item {item_id_input} is not a story or was not found.")
+                st.error("Could not find a random recent story. Please try again.")
                 st.session_state.score, st.session_state.comments = None, None
 
+# --- Fetch by ID ---
+with id_col:
+    st.subheader("By ID")
+    text_col, button_col = st.columns(2)
+    with text_col:
+        item_id_input = st.number_input(
+            "Hacker News Post ID",
+            min_value=1,
+            value=st.session_state["id"],
+            step=1,
+            label_visibility="collapsed",
+        )
+    with button_col:
+        if st.button("Fetch and Populate"):
+            with st.spinner(f"Fetching data for item {item_id_input}..."):
+                item_data = get_item(item_id_input)
+                if item_data and item_data.get("type") == "story":
+                    st.session_state.by = item_data.get("by", "")
+                    st.session_state.title = item_data.get("title", "")
+                    st.session_state.url = item_data.get("url", "")
+                    st.session_state.time_obj = datetime.datetime.fromtimestamp(
+                        item_data.get("time", 0)
+                    )
+                    st.session_state.score = item_data.get("score", 0)
+                    st.session_state.comments = item_data.get("descendants", 0)
+                    st.success(
+                        f"Successfully populated form with data for ID {item_id_input}."
+                    )
+                else:
+                    st.warning(f"Item {item_id_input} is not a story or was not found.")
+                    st.session_state.score, st.session_state.comments = None, None
 
-# Display metrics if they exist in the session state
-if st.session_state.score is not None:
-    st.write("---")
-    metric_col1, metric_col2 = st.columns(2)
-    with metric_col1:
-        st.metric("Actual Score", st.session_state.score)
-    with metric_col2:
-        st.metric("Comments", st.session_state.comments)
+
+# --- Section 2: Prediction ---
+st.markdown(
+    f"""
+<table>
+<tr><td><strong>Author</strong></td><td>{st.session_state.by}</td></tr>
+<tr><td><strong>Title</strong></td><td>{st.session_state.title}</td></tr>
+<tr><td><strong>URL</strong></td><td>{st.session_state.url}</td></tr>
+<tr><td><strong>Date</strong></td><td>{st.session_state.time_obj.date()}</td></tr>
+<tr><td><strong>Time</strong></td><td>{st.session_state.time_obj.time()}</td></tr>
+</table>
+""",
+    unsafe_allow_html=True,
+)
+
 
 st.divider()
 
-# --- Section 2: Prediction ---
-st.header("2. Review Data and Predict Score")
-st.write("Review or edit the populated data, then click predict.")
-
-by_input = st.text_input("Author (by)", key="by")
-title_input = st.text_input("Post Title", key="title")
-url_input = st.text_input("URL", key="url")
-
-date_input = st.date_input("Post Date", st.session_state.time_obj.date())
-time_input = st.time_input("Post Time", st.session_state.time_obj.time())
-
-datetime_obj = datetime.datetime.combine(date_input, time_input)
+datetime_obj = datetime.datetime.combine(
+    st.session_state.time_obj.date(), st.session_state.time_obj.time()
+)
 time_stamp = int(datetime_obj.timestamp())
+payload = HNPostData(
+    by=st.session_state.by,
+    title=st.session_state.title,
+    url=st.session_state.url,
+    time=time_stamp,
+)
+try:
+    with st.spinner("Getting prediction..."):
+        prediction = predict_direct(payload)
+        prediction_col, actual_col = st.columns(2)
+        with prediction_col:
+            st.metric("Median Prediction", format(prediction["median"], ".0f"))
 
-st.write(f"_Final Unix Timestamp for API: `{time_stamp}`_")
+            st.caption(
+                "Since HN scores are heavily skewed (46% of posts get score ≤1, and 20% get score 2), "
+                "we show the full probability distribution."
+            )
 
-if st.button("Predict Score"):
-    payload = HNPostData(
-        by=by_input,
-        title=title_input,
-        url=url_input,
-        time=time_stamp,
-    )
-    try:
-        with st.spinner("Getting prediction..."):
-            prediction = predict_direct(payload)
-            st.success("Prediction successful!")
-            st.write(f"**Predictiona:** {prediction}")
+            # Display quantiles with meaningful labels
+            # Note: These percentiles align with natural score boundaries in HN data
+            quantile_labels = [
+                "46th percentile (~1 point)",
+                "66th percentile (~2 points)",
+                "75th percentile (~3 points)",
+                "90th percentile (~16 points)",
+                "97th percentile (~100 points)",
+            ]
+            quantile_explanations = [
+                "46% of similar posts score at or below this value",
+                "66% of similar posts score at or below this value",
+                "75% of similar posts score at or below this value",
+                "90% of similar posts score at or below this value",
+                "97% of similar posts score at or below this value",
+            ]
 
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
+            for q, (label, explanation, value) in enumerate(
+                zip(quantile_labels, quantile_explanations, prediction["quantiles"])
+            ):
+                st.metric(label, format(value, ".1f"), help=explanation)
+
+            # Show confidence interval
+            if len(prediction["quantiles"]) >= 2:
+                low_quantile = prediction["quantiles"][0]  # 46th percentile
+                high_quantile = prediction["quantiles"][-1]  # 97th percentile
+                st.info(
+                    f"**Confidence Range**: {format(low_quantile, '.0f')} - {format(high_quantile, '.1f')} points (46th to 97th percentile)"
+                )
+        with actual_col:
+            if st.session_state.score is not None:
+                st.metric("Actual Score", st.session_state.score)
+except Exception as e:
+    st.error(f"An unexpected error occurred: {e}")

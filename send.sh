@@ -44,3 +44,16 @@ EOF
 scp ssh.sh "$REMOTE:ssh.sh"
 scp .env "$REMOTE:.env"
 scp .tmux.conf "$REMOTE:.tmux.conf"
+
+# Execute ssh.sh on the remote server
+echo "Executing setup script on remote server..."
+ssh "$REMOTE" "chmod +x ssh.sh && ./ssh.sh"
+
+function send() {
+    rsync -vrt "$1/*" "$REMOTE:/workspace/mlx/$1"
+}
+
+send common
+send training
+send ui
+send data
