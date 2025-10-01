@@ -18,7 +18,7 @@ pyrightconfig.json
 *.aria2
 *.zip
 *.gz
-
+*.xlsx
 *.pth
 *.csv
 .tmux.conf
