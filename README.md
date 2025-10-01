@@ -55,13 +55,18 @@ export ENV=./.env.dev
 
 4. Build on your dev machine:
 
+Docker must be running.
+
 ```
 ./build.sh ui
-scp ui_prod.sh <server>:ui_prod.sh
+# test locally
+./ui_staging.sh
 ```
 
 5. Start on your server:
 
 ```
+scp ui_prod.sh <server>:ui_prod.sh
+# on server
 ./ui_prod.sh
 ```

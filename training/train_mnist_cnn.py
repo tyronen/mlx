@@ -90,8 +90,8 @@ def main():
         train(train_dataloader, model, loss_fn, optimizer, device)
         test(test_dataloader, model, loss_fn, device)
 
-    torch.save(model.state_dict(), args.model_path)
-    logging.info(f"Saved PyTorch model state to {args.model_path}")
+    torch.save(model.state_dict(), CNN.MODEL_PATH)
+    logging.info(f"Saved PyTorch model state to {CNN.MODEL_PATH}")
 
 
 if __name__ == "__main__":

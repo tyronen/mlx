@@ -34,8 +34,8 @@ reddit_summariser_page = st.Page(
 
 pg = st.navigation(
     [
-        hn_predict_page,
         simple_mnist_page,
+        hn_predict_page,
         msmarco_search_page,
         complex_mnist_page,
         whisper_transcode_page,

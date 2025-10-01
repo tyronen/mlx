@@ -11,6 +11,12 @@ RUN pip install --prefer-binary -r requirements.txt
 
 RUN mkdir -p /app/data
 COPY data/mnist_cnn.pth /app/data/
+COPY data/train_vocab.json /app/data/
+COPY data/vocab.json /app/data/
+COPY data/scaler.npz /app/data/
+COPY data/inference_cache.pkl /app/data/
+COPY data/best_quantile.pth /app/data/
+
 COPY common/ /app/common/
 COPY models/ /app/models/
 COPY ui/ /app/ui/
