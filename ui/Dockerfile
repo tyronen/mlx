@@ -6,10 +6,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
 COPY ui/requirements.txt .
-
 RUN pip install --prefer-binary -r requirements.txt
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/common /app/models /app/ui
+
 COPY data/mnist_cnn.pth /app/data/
 COPY data/train_vocab.json /app/data/
 COPY data/vocab.json /app/data/
