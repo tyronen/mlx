@@ -8,10 +8,10 @@ from redis.commands.search.index_definition import IndexDefinition, IndexType
 from datasets import load_dataset
 from tqdm import tqdm
 import torch
+import torch.nn.functional as F
 
-import utils
-from model import DocTower
-from tokenizer import Word2VecTokenizer
+from common import utils
+from models import msmarco_search, msmarco_tokenizer
 
 
 def load_document_corpus():
@@ -86,8 +86,11 @@ def encode_all_documents(tokenizer, doc_tower, documents, device, batch_size=100
             # Tokenize batch
             tokenized = tokenizer(batch_texts)["input_ids"].to(device)
 
-            # Encode
+            # Encode and normalize
             embeddings = doc_tower(tokenized)
+            embeddings = F.normalize(
+                embeddings, p=2, dim=1
+            )  # Normalize like in model.py
 
             all_embeddings.extend(embeddings.cpu().numpy())
             # Store metadata for each document
@@ -186,9 +189,9 @@ def main():
     device = utils.get_device()
     redis_client = redis.Redis(host="localhost", port=6379, db=0)
     redis_client.flushdb()
-    checkpoint = torch.load(utils.MODEL_FILE, map_location=device)
-    tokenizer = Word2VecTokenizer()
-    doc_tower = DocTower(
+    checkpoint = torch.load(msmarco_search.MODEL_FILE, map_location=device)
+    tokenizer = msmarco_tokenizer.Word2VecTokenizer()
+    doc_tower = msmarco_search.DocTower(
         embeddings=tokenizer.embeddings,
         embed_dim=checkpoint["embed_dim"],
         dropout_rate=checkpoint["dropout_rate"],

@@ -4,8 +4,8 @@ import torch
 from tqdm import tqdm
 
 from dataset import TripletDataset, DATASET_FILE
-import utils
-from tokenizer import Word2VecTokenizer, MAX_LENGTH
+from common import utils
+from models import msmarco_tokenizer
 
 from collections import Counter
 from datasets import load_dataset
@@ -26,7 +26,7 @@ def build_doc_freq(ms_marco_data):
             for text in row["passages"]["passage_text"]:
                 N += 1
                 # use a set so each word counted once per doc
-                unique_words = set(text.lower().split()[:MAX_LENGTH])
+                unique_words = set(text.lower().split()[: msmarco_tokenizer.MAX_LENGTH])
                 df.update(unique_words)
 
     return df, N
@@ -42,7 +42,7 @@ def main():
     logging.info("Building document frequency...")
     df, N = build_doc_freq(ms_marco_data)
 
-    tokenizer = Word2VecTokenizer(doc_freq=df)
+    tokenizer = msmarco_tokenizer.Word2VecTokenizer(doc_freq=df)
 
     logging.info("Creating training dataset...")
     train_dataset = TripletDataset(ms_marco_data["train"], tokenizer, device)

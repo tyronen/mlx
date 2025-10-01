@@ -29,7 +29,8 @@ class Word2VecTokenizer:
                 self.ix_to_word[new_idx] = word
             embedding_dim = self.embeddings.shape[1]  # Assuming [vocab_size, dim]
             pad_vec = torch.zeros((1, embedding_dim))
-            unk_vec = torch.randn((1, embedding_dim))
+            # Use mean of all embeddings for UNK instead of random
+            unk_vec = self.embeddings.mean(dim=0, keepdim=True)
             self.embeddings = torch.cat([pad_vec, unk_vec, self.embeddings], dim=0)
 
         self.vocab_size = len(self.word_to_ix)
@@ -38,16 +39,17 @@ class Word2VecTokenizer:
 
     def embed(self, text):
         words = text.lower().split()[:MAX_LENGTH]
-        vec_sum, weight_sum = 0.0, 0.0
+        vec_sum = torch.zeros(self.embeddings.shape[1])
+        weight_sum = 0.0
         for w in words:
             idx = self.word_to_ix.get(w, self.word_to_ix["<UNK>"])
-            idf = 1.0 / math.log1p(self.doc_freq.get(w, 1))
+            idf = 1.0 / math.log1p(self.doc_freq.get(w, 1) if self.doc_freq else 1)
             vec_sum += self.embeddings[idx] * idf
             weight_sum += idf
         return (
             (vec_sum / weight_sum).cpu().numpy()
-            if weight_sum
-            else self.embeddings[self.word_to_ix["<UNK>"]]
+            if weight_sum > 0
+            else self.embeddings[self.word_to_ix["<UNK>"]].cpu().numpy()
         )
 
     # tokenize() calls this

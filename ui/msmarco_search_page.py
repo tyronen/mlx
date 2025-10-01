@@ -1,43 +1,23 @@
 import streamlit as st
-import requests
 import random
-from datasets import load_dataset
-import pandas as pd
+from datasets import load_dataset, Dataset
+from typing import Dict, List, Tuple, Any, Optional
+
+from ui.msmarco_search.main import search
 
 # Configure Streamlit page
 st.set_page_config(page_title="MS MARCO Query Tester", page_icon="🔍", layout="wide")
 
-# FastAPI server configuration
-FASTAPI_URL = "http://localhost:8000"
-
 
 @st.cache_data
-def load_msmarco_dataset():
+def load_msmarco_dataset() -> Dataset:
     """Load MS MARCO dataset and cache it"""
     with st.spinner("Loading MS MARCO dataset..."):
         dataset = load_dataset("ms_marco", "v1.1")
-        return dataset["train"]
+        return dataset["train"]  # type: ignore
 
 
-def query_fastapi_server(query, correct_id):
-    """Send query to FastAPI server and get results"""
-    try:
-        response = requests.get(
-            f"{FASTAPI_URL}/search",
-            params={"query": query, "correct_id": correct_id},
-            timeout=10,
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            st.error(f"API Error: {response.status_code} - {response.text}")
-            return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"Connection error: {str(e)}")
-        return None
-
-
-def format_similarity_score(score):
+def format_similarity_score(score: float) -> str:
     """Format similarity score with color coding"""
     if score > 0.8:
         return f"🟢 **{score:.3f}**"
@@ -49,7 +29,9 @@ def format_similarity_score(score):
         return f"🔴 **{score:.3f}**"
 
 
-def display_document(doc_info, title, is_positive=False):
+def display_document(
+    doc_info: Tuple[str, float, str], title: str, is_positive: bool = False
+) -> None:
     """Display a document in a nice format"""
     doc_id, similarity, text = doc_info
 
@@ -83,7 +65,7 @@ def display_document(doc_info, title, is_positive=False):
     )
 
 
-def main():
+def main() -> None:
     st.title("🔍 MS MARCO Query Tester")
     st.markdown("Test your two-tower search system against MS MARCO ground truth!")
 
@@ -110,7 +92,7 @@ def main():
     st.sidebar.subheader("Random Query from MS MARCO")
     if st.sidebar.button("🎲 Find Random Query", type="primary"):
         random_idx = random.randint(0, len(dataset) - 1)
-        row = dataset[random_idx]
+        row = dataset[random_idx]  # type: ignore
 
         st.session_state.current_query = row["query"]
         passages = row["passages"]
@@ -145,7 +127,7 @@ def main():
         # Search button
         if st.button("🔍 Search with FastAPI", type="primary"):
             with st.spinner("Searching..."):
-                results = query_fastapi_server(st.session_state.current_query)
+                results: Dict[str, Any] = search(st.session_state.current_query)
                 st.session_state.search_results = results
 
         # Display results
@@ -187,7 +169,8 @@ def main():
                     and st.session_state.current_item
                 ):
                     # Find the positive passages
-                    passages = st.session_state.current_item["passages"]
+                    current_item_data: Dict[str, Any] = st.session_state.current_item
+                    passages = current_item_data["passages"]
                     passage_texts = passages["passage_text"]
                     is_selected = passages["is_selected"]
 
@@ -210,7 +193,7 @@ def main():
                     # Show some negative examples too
                     with st.expander("See negative examples from ground truth"):
                         negative_passages = [
-                            (f"negative_{i}", 0.0, passage_texts[i][:200] + "...")
+                            (f"negative_{i}", 0.0, str(passage_texts[i])[:200] + "...")
                             for i, selected in enumerate(is_selected)
                             if selected == 0
                         ]
@@ -234,13 +217,15 @@ def main():
             st.header("📊 Performance Analysis")
 
             # Check if top result matches any positive passage
-            documents = st.session_state.search_results["documents"]
-            passages = st.session_state.current_item["passages"]
+            search_results: Dict[str, Any] = st.session_state.search_results
+            documents: List[Tuple[str, float, str]] = search_results["documents"]
+            current_item_analysis: Dict[str, Any] = st.session_state.current_item
+            passages = current_item_analysis["passages"]
             passage_texts = passages["passage_text"]
             is_selected = passages["is_selected"]
 
             positive_texts = [
-                passage_texts[i]
+                str(passage_texts[i])
                 for i, selected in enumerate(is_selected)
                 if selected == 1
             ]
@@ -266,11 +251,10 @@ def main():
                     st.metric("Top Similarity Score", f"{similarity:.3f}")
 
             with col3:
-                if hasattr(st.session_state.search_results, "get"):
-                    latency = st.session_state.search_results.get("Latency", "N/A")
-                    st.metric(
-                        "Search Latency", f"{latency}ms" if latency != "N/A" else "N/A"
-                    )
+                latency = search_results.get("latency", "N/A")
+                st.metric(
+                    "Search Latency", f"{latency}ms" if latency != "N/A" else "N/A"
+                )
 
     else:
         st.info("👈 Click 'Find Random Query' in the sidebar to get started!")
@@ -284,9 +268,9 @@ def main():
 
         with col2:
             # Sample a few items to get average passage count
-            sample_items = [dataset[i] for i in range(0, min(100, len(dataset)), 10)]
+            sample_items = [dataset[i] for i in range(0, min(100, len(dataset)), 10)]  # type: ignore
             avg_passages = sum(
-                len(item["passages"]["passage_text"]) for item in sample_items
+                len(item["passages"]["passage_text"]) for item in sample_items  # type: ignore
             ) / len(sample_items)
             st.metric("Avg Passages per Query", f"{avg_passages:.1f}")
 

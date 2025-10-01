@@ -1,18 +1,17 @@
 import json
 import logging
 import struct
-from contextlib import asynccontextmanager
 import os
 import numpy as np
 import redis
 import torch
-from fastapi import FastAPI
-from model import QueryTower
-import utils
+from models import msmarco_search
+from common import utils
 from redis.commands.search.query import Query
 import random
+from typing import List, Dict, Any
 
-from tokenizer import Word2VecTokenizer
+from models.msmarco_tokenizer import Word2VecTokenizer
 
 # Write the model version here or find some way to derive it from the model
 # eg. from the model files name
@@ -25,51 +24,33 @@ model_version = "0.1.0"
 log_dir_path = "/var/log/app"
 log_path = f"{log_dir_path}/V-{model_version}.log"
 
+utils.setup_logging()
+device = utils.get_device()
+tokenizer = Word2VecTokenizer()
+checkpoint = torch.load(msmarco_search.MODEL_FILE, map_location=device)
 
-query_tower = None
-tokenizer = None
-device = None
-redis_client = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global query_tower, tokenizer, device, redis_client
-    utils.setup_logging()
-    device = utils.get_device()
-    tokenizer = Word2VecTokenizer()
-    checkpoint = torch.load(utils.MODEL_FILE, map_location=device)
-
-    query_tower = QueryTower(
-        tokenizer.embeddings,
-        embed_dim=checkpoint["embed_dim"],
-        dropout_rate=checkpoint["dropout_rate"],
-    ).to(device)
-    query_tower.load_state_dict(checkpoint["query_tower"])
-    redis_client = redis.Redis(host="redis-stack", port=6379, db=0)
-    yield
-
-
-app = FastAPI(lifespan=lifespan)
+query_tower = msmarco_search.QueryTower(
+    tokenizer.embeddings,
+    embed_dim=checkpoint["embed_dim"],
+    dropout_rate=checkpoint["dropout_rate"],
+).to(device)
+query_tower.load_state_dict(checkpoint["query_tower"])
+redis_client: redis.Redis = redis.Redis(host="redis-stack", port=6379, db=0)
 
 
 # Define the endpoints
-@app.get("/ping")
 def ping():
     return "ok"
 
 
-@app.get("/version")
 def version():
     return {"version": model_version}
 
 
-@app.get("/logs")
 def logs():
     return read_logs(log_path)
 
 
-@app.get("/search")
 def search(query):
     global query_tower, redis_client, tokenizer, device
     if (query_tower is None) or (tokenizer is None) or (redis_client is None):
@@ -170,23 +151,24 @@ def do_search(query, query_tower, redis_client, tokenizer, device, top_k=5):
     return search_results
 
 
-def get_ground_truth_docs(query):
+def get_ground_truth_docs(query: str) -> List[Dict[str, Any]]:
     """Get ground truth positive documents for a query"""
     global redis_client
     try:
-        positive_doc_ids = redis_client.smembers(f"query_positive:{query}")
-        positive_docs = []
+        positive_doc_ids = redis_client.smembers(f"query_positive:{query}")  # type: ignore[assignment]
+        positive_docs: List[Dict[str, Any]] = []
 
-        for doc_id in positive_doc_ids:
+        for doc_id in positive_doc_ids:  # type: ignore[attr-defined]
             doc_id_str = (
                 "doc:" + doc_id.decode("utf-8") if isinstance(doc_id, bytes) else doc_id
             )
-            doc_data = redis_client.hmget(f"{doc_id_str}", "text")
-            if doc_data[0]:
+            doc_data = redis_client.hmget(f"{doc_id_str}", ["text"])  # type: ignore[assignment]
+            if doc_data and doc_data[0]:  # type: ignore[attr-defined,index]
+                # type: ignore[attr-defined,index]
                 text = (
-                    doc_data[0].decode("utf-8")
+                    doc_data[0].decode("utf-8")  # type: ignore[attr-defined,index]
                     if isinstance(doc_data[0], bytes)
-                    else doc_data[0]
+                    else doc_data[0]  # type: ignore[attr-defined,index]
                 )
                 positive_docs.append(
                     {
@@ -202,7 +184,9 @@ def get_ground_truth_docs(query):
         return []
 
 
-def calculate_ground_truth_similarity(query, ground_truth_docs):
+def calculate_ground_truth_similarity(
+    query: str, ground_truth_docs: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     global query_tower, tokenizer, device
     """Calculate actual similarity between query and ground truth docs"""
     if not ground_truth_docs:
@@ -215,13 +199,16 @@ def calculate_ground_truth_similarity(query, ground_truth_docs):
         query_embedding = query_tower(tokenized_query).cpu().numpy().flatten()
 
         # Calculate similarities to ground truth docs
-        results = []
+        results: List[Dict[str, Any]] = []
         for gt_doc in ground_truth_docs:
             doc_id = gt_doc["doc_id"]
             # Get document embedding from Redis
-            doc_embedding_bytes = redis_client.hget(f"{doc_id}", "embedding")
+            doc_embedding_bytes = redis_client.hget(f"{doc_id}", "embedding")  # type: ignore[assignment]
             if doc_embedding_bytes:
-                doc_embedding = np.frombuffer(doc_embedding_bytes, dtype=np.float32)
+                # Ensure we have bytes data
+                if isinstance(doc_embedding_bytes, str):
+                    doc_embedding_bytes = doc_embedding_bytes.encode("utf-8")
+                doc_embedding = np.frombuffer(doc_embedding_bytes, dtype=np.float32)  # type: ignore[arg-type]
                 similarity = np.dot(query_embedding, doc_embedding)
                 results.append(
                     {
@@ -234,15 +221,14 @@ def calculate_ground_truth_similarity(query, ground_truth_docs):
         return results
 
 
-@app.get("/random_query")
-def get_random_query():
+def get_random_query() -> Dict[str, Any]:
     """Get a random query that has ground truth data"""
-    all_queries = redis_client.smembers("all_queries")
+    all_queries = redis_client.smembers("all_queries")  # type: ignore[assignment]
     if not all_queries:
         return {"error": "No queries found in database"}
 
     # Convert bytes to strings and pick random
-    query_list = [q.decode("utf-8") if isinstance(q, bytes) else q for q in all_queries]
+    query_list = [q.decode("utf-8") if isinstance(q, bytes) else q for q in all_queries]  # type: ignore[attr-defined]
     random_query = random.choice(query_list)
 
     return search(random_query)

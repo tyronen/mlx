@@ -2,6 +2,8 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 
+MODEL_FILE = "data/twin_towers.pth"
+
 
 class Tower(nn.Module):
     def __init__(self, embeddings, embed_dim, dropout_rate):

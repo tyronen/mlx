@@ -6,13 +6,12 @@ from torch.cuda.amp import autocast, GradScaler
 
 import wandb
 from tqdm import tqdm
-import utils
+from common import utils
 from torch.utils.data import DataLoader
 import numpy as np
 from dataset import DATASET_FILE
-from model import QueryTower, DocTower
+from models import msmarco_search
 from tokenizer import Word2VecTokenizer
-from utils import MODEL_FILE
 
 # ------------- additional imports -------------
 import random
@@ -57,22 +56,28 @@ def mine_hard_negatives(
 ):
     """
     For every query, pick the most similar *non‑positive* passage from a
-    sampled pool of other positives and use it as the new negative.
+    sampled pool of all documents (excluding positives for that query).
     """
     # ---- resolve triplet source --------------------------------------------
     triplets = dataset.triplets if hasattr(dataset, "triplets") else dataset
 
-    # ---- build candidate pool ----------------------------------------------
-    all_pos_texts = [t["positive_text"] for t in triplets]
-    if len(all_pos_texts) > pool_size:
-        all_pos_texts = random.sample(all_pos_texts, pool_size)
+    # ---- build candidate pool from ALL documents (not just positives) ------
+    all_doc_texts = []
+    for t in triplets:
+        all_doc_texts.append(t["positive_text"])
+        all_doc_texts.append(t["negative_text"])
+
+    # Remove duplicates
+    all_doc_texts = list(set(all_doc_texts))
+    if len(all_doc_texts) > pool_size:
+        all_doc_texts = random.sample(all_doc_texts, pool_size)
 
     # encode pool once
     doc_tower.eval()
     cand_embs = []
     with torch.no_grad():
-        for i in range(0, len(all_pos_texts), batch_enc):
-            toks = tokenizer(all_pos_texts[i : i + batch_enc])["input_ids"].to(device)
+        for i in range(0, len(all_doc_texts), batch_enc):
+            toks = tokenizer(all_doc_texts[i : i + batch_enc])["input_ids"].to(device)
             cand_embs.append(doc_tower(toks))
     cand_embs = torch.cat(cand_embs, dim=0)  # [N,D]
     cand_embs = F.normalize(cand_embs, p=2, dim=1)  # unit vectors
@@ -84,13 +89,35 @@ def mine_hard_negatives(
         for i in range(0, len(triplets), batch_enc):
             sub = triplets[i : i + batch_enc]
             q_texts = [t["query_text"] for t in sub]
+            pos_texts = [t["positive_text"] for t in sub]
+
             toks = tokenizer(q_texts)["input_ids"].to(device)
             q_embs = F.normalize(query_tower(toks), p=2, dim=1)  # [b,D]
 
             sims = torch.matmul(q_embs, cand_embs.T)  # [b,N]
-            top_idx = sims.topk(top_k, dim=1).indices[:, 0]  # best idx
-            for j, idx in enumerate(top_idx):
-                mapping[q_texts[j]] = all_pos_texts[idx.item()]
+
+            # For each query, find the hardest negative (highest similarity)
+            # that is NOT the positive for that query
+            for j, (q_text, pos_text) in enumerate(zip(q_texts, pos_texts)):
+                # Get similarities for this query
+                q_sims = sims[j]  # [N]
+
+                # Find indices of documents that are NOT the positive
+                non_pos_mask = torch.tensor(
+                    [all_doc_texts[k] != pos_text for k in range(len(all_doc_texts))],
+                    device=device,
+                )
+
+                if non_pos_mask.any():
+                    # Mask out positive documents and find hardest negative
+                    masked_sims = q_sims.masked_fill(~non_pos_mask, float("-inf"))
+                    top_idx = masked_sims.argmax()
+                    mapping[q_text] = all_doc_texts[top_idx.item()]
+                else:
+                    # Fallback: use random negative if no non-positive docs
+                    mapping[q_text] = random.choice(
+                        [t for t in all_doc_texts if t != pos_text]
+                    )
 
     # ---- apply --------------------------------------------------------------
     dataset.replace_negatives(mapping)
@@ -296,12 +323,12 @@ def main():
     tokenizer = Word2VecTokenizer()
     vocab_size = tokenizer.vocab_size
 
-    query_tower = QueryTower(
+    query_tower = msmarco_search.QueryTower(
         tokenizer.embeddings,
         hyperparameters["embed_dim"],
         hyperparameters["dropout_rate"],
     ).to(device)
-    doc_tower = DocTower(
+    doc_tower = msmarco_search.DocTower(
         tokenizer.embeddings,
         hyperparameters["embed_dim"],
         hyperparameters["dropout_rate"],
@@ -431,14 +458,14 @@ def main():
                     "embed_dim": hyperparameters["embed_dim"],
                     "dropout_rate": hyperparameters["dropout_rate"],
                 },
-                MODEL_FILE,
+                msmarco_search.MODEL_FILE,
             )
         else:
             patience_counter += 1
             if patience_counter >= hyperparameters["patience"]:
                 run.log({"early_stopping_epochs": epoch + 1})
                 break
-    checkpoint = torch.load(MODEL_FILE)
+    checkpoint = torch.load(msmarco_search.MODEL_FILE)
     query_tower.load_state_dict(checkpoint["query_tower"])
     doc_tower.load_state_dict(checkpoint["doc_tower"])
     test_loss, retrieval_acc = validate_model(
@@ -454,7 +481,7 @@ def main():
         step=last_epoch + 1,
     )
     artifact = wandb.Artifact(name="two_tower_model", type="model")
-    artifact.add_file(MODEL_FILE)
+    artifact.add_file(msmarco_search.MODEL_FILE)
     run.log_artifact(artifact)
     run.finish(0)
 
