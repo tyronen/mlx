@@ -12,7 +12,7 @@ RUN mkdir -p /app/data /app/common /app/models /app/ui
 
 COPY data/mnist_cnn.pth /app/data/
 COPY data/train_vocab.json /app/data/
-COPY data/vocab.json /app/data/
+COPY data/hn_predict/word_to_ix.json /app/data/
 COPY data/scaler.npz /app/data/
 COPY data/inference_cache.pkl /app/data/
 COPY data/best_quantile.pth /app/data/

@@ -14,7 +14,7 @@ from transformers.optimization import get_cosine_with_min_lr_schedule_with_warmu
 
 from common import utils
 from models.hn_predict import QuantileRegressionModel
-from models.hn_predict_utils import TRAINING_VOCAB_PATH, VOCAB_PATH
+from models.hn_predict_utils import TRAINING_VOCAB_PATH, WORD_TO_IX_PATH
 from .dataloader import PrecomputedDataset
 from .helpers import QuantileLoss
 
@@ -96,7 +96,7 @@ def main():
     with open(TRAINING_VOCAB_PATH, "r") as f:
         vocabs = json.load(f)
 
-    with open(VOCAB_PATH, "r") as f:
+    with open(WORD_TO_IX_PATH, "r") as f:
         word_vocab = json.load(f)
 
     train_dataset = PrecomputedDataset(TRAIN_FILE)

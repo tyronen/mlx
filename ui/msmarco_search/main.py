@@ -1,3 +1,4 @@
+# type: ignore[assignment,attr-defined,index]
 import json
 import logging
 import struct
@@ -155,20 +156,21 @@ def get_ground_truth_docs(query: str) -> List[Dict[str, Any]]:
     """Get ground truth positive documents for a query"""
     global redis_client
     try:
-        positive_doc_ids = redis_client.smembers(f"query_positive:{query}")  # type: ignore[assignment]
+        positive_doc_ids = redis_client.smembers(f"query_positive:{query}")
         positive_docs: List[Dict[str, Any]] = []
 
-        for doc_id in positive_doc_ids:  # type: ignore[attr-defined]
+        for doc_id in positive_doc_ids:
             doc_id_str = (
                 "doc:" + doc_id.decode("utf-8") if isinstance(doc_id, bytes) else doc_id
             )
-            doc_data = redis_client.hmget(f"{doc_id_str}", ["text"])  # type: ignore[assignment]
-            if doc_data and doc_data[0]:  # type: ignore[attr-defined,index]
-                # type: ignore[attr-defined,index]
+            doc_data = redis_client.hmget(f"{doc_id_str}", ["text"])
+            if doc_data and doc_data[0]:
                 text = (
-                    doc_data[0].decode("utf-8")  # type: ignore[attr-defined,index]
-                    if isinstance(doc_data[0], bytes)
-                    else doc_data[0]  # type: ignore[attr-defined,index]
+                    doc_data[0].decode("utf-8")
+                    if isinstance(
+                        doc_data[0], bytes
+                    )  # pyright: ignore[reportIndexIssue]
+                    else doc_data[0]
                 )
                 positive_docs.append(
                     {
@@ -203,7 +205,7 @@ def calculate_ground_truth_similarity(
         for gt_doc in ground_truth_docs:
             doc_id = gt_doc["doc_id"]
             # Get document embedding from Redis
-            doc_embedding_bytes = redis_client.hget(f"{doc_id}", "embedding")  # type: ignore[assignment]
+            doc_embedding_bytes = redis_client.hget(f"{doc_id}", "embedding")
             if doc_embedding_bytes:
                 # Ensure we have bytes data
                 if isinstance(doc_embedding_bytes, str):
@@ -223,12 +225,12 @@ def calculate_ground_truth_similarity(
 
 def get_random_query() -> Dict[str, Any]:
     """Get a random query that has ground truth data"""
-    all_queries = redis_client.smembers("all_queries")  # type: ignore[assignment]
+    all_queries = redis_client.smembers("all_queries")
     if not all_queries:
         return {"error": "No queries found in database"}
 
     # Convert bytes to strings and pick random
-    query_list = [q.decode("utf-8") if isinstance(q, bytes) else q for q in all_queries]  # type: ignore[attr-defined]
+    query_list = [q.decode("utf-8") if isinstance(q, bytes) else q for q in all_queries]
     random_query = random.choice(query_list)
 
     return search(random_query)

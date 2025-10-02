@@ -1,73 +1,13 @@
 # pyright: reportAttributeAccessIssue=false, reportCallIssue=false, reportArgumentType=false, reportIndexIssue=false
-import argparse
-import hashlib
+
 import json
 import logging
 import os
 
 import numpy as np
-from datasets import load_dataset
-
-from common import utils
-from common.utils import tokenize_text
-from models.hn_predict_utils import VOCAB_PATH
-
-COMMENT_SAMPLE = 8
 
 
-def tokenize_title_batch(batch):
-    types = batch["type"]
-    titles = batch["title"]
-    texts = batch["text"]
-    out = []
-    append = out.append
-    for t, ttl, txt in zip(types, titles, texts):
-        s = ttl if t == "story" else (txt if t == "comment" else None)
-        append(tokenize_text(s) if isinstance(s, str) and s.strip() else [])
-
-    return {"tokens": out}
-
-
-def keep_row(ex):
-    t = ex.get("type", None)
-    if t == "story":
-        return True
-    if t != "comment":
-        return False
-    raw_id = ex.get("id", "")
-    try:
-        n = int(raw_id)
-    except Exception:
-        n = int(hashlib.md5(str(raw_id).encode("utf-8")).hexdigest(), 16)
-    return (n % COMMENT_SAMPLE) == 0
-
-
-def main():
-    utils.setup_logging()
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out_dir", default="data", help="Output directory")
-    ap.add_argument("--min_freq", type=int, default=35)
-    ap.add_argument("--batch_size", type=int, default=10_000)
-    ap.add_argument("--num_proc", type=int, default=os.cpu_count() or 4)
-    args = ap.parse_args()
-
-    os.makedirs(args.out_dir, exist_ok=True)
-    # 1) Load minimal columns
-    ds = load_dataset("OpenPipe/hacker-news", split="train")
-    cols = ds.column_names or []
-    keep = [c for c in ("type", "title", "text", "id") if c in cols]
-    ds = ds.remove_columns([c for c in cols if c not in keep])
-    ds = ds.filter(keep_row)
-
-    # 2) Tokenize in parallel (cached on disk by HF)
-    ds = ds.map(
-        tokenize_title_batch,
-        batched=True,
-        batch_size=args.batch_size,
-        num_proc=args.num_proc,
-        desc="Tokenizing (batched)",
-    )
-
+def prepare_vocab(ds, min_freq, out_dir):
     # 3) Pass 1: count tokens -> vocab  (PANDAS, VECTORIZED)
     # ds already has a "tokens" column (list[str]) from your batched map.
     # Convert to a DataFrame once, explode to a flat Series, and value_counts.
@@ -82,14 +22,14 @@ def main():
     logging.info(f"Vocab size at min_freq=15: {(vc >= 15).sum()}")
     logging.info(f"Vocab size at min_freq=35: {(vc >= 35).sum()}")
     # vocab and mapping
-    vc_kept = vc[vc >= args.min_freq]
+    vc_kept = vc[vc >= min_freq]
     # if you want sorted vocab for reproducibility, uncomment:
     # vc_kept = vc_kept.sort_index(kind="mergesort")
     vocab = vc_kept.index.tolist()
     word_to_ix = dict(zip(vocab, range(len(vocab))))
     ix_to_word = {i: w for i, w in enumerate(vocab)}
 
-    logging.info(f"Vocab ≥{args.min_freq}: {len(vocab):,}")
+    logging.info(f"Vocab ≥{min_freq}: {len(vocab):,}")
 
     # 4) Pass 2: total kept tokens (vectorized)
     # Filter the flat Series to only vocab, map to ids, and measure length
@@ -101,9 +41,10 @@ def main():
     logging.info(f"Total kept tokens: {total_kept:,}")
 
     # 5) Pass 3: write indices (memmap) and counts array (aligned to vocab)
-    idx_path = os.path.join(args.out_dir, "indices.int32.npy")
-    counts_path = os.path.join(args.out_dir, "counts.int64.npy")
-    ix2_path = os.path.join(args.out_dir, "ix_to_word.json")
+    idx_path = os.path.join(out_dir, "indices.int32.npy")
+    counts_path = os.path.join(out_dir, "counts.int64.npy")
+    ix2_path = os.path.join(out_dir, "ix_to_word.json")
+    w2i_path = os.path.join(out_dir, "word_to_ix.json")
 
     # counts aligned to vocab order in O(1) using reindex
     counts = vc.reindex(vocab).fillna(0).to_numpy(dtype="int64")
@@ -114,7 +55,7 @@ def main():
     indices.flush()
     np.save(counts_path, counts, allow_pickle=False)
 
-    with open(VOCAB_PATH, "w", encoding="utf-8") as f:
+    with open(w2i_path, "w", encoding="utf-8") as f:
         json.dump(word_to_ix, f, ensure_ascii=False)
 
     with open(ix2_path, "w", encoding="utf-8") as f:
@@ -123,9 +64,5 @@ def main():
     logging.info("✅ Wrote:")
     logging.info(idx_path)
     logging.info(counts_path)
-    logging.info(VOCAB_PATH)
+    logging.info(w2i_path)
     logging.info(ix2_path)
-
-
-if __name__ == "__main__":
-    main()

@@ -6,6 +6,7 @@ This helps understand how many MS MARCO terms are out-of-vocabulary.
 
 import logging
 from collections import Counter
+from typing import Any, Dict, List
 from datasets import load_dataset
 from models.msmarco_tokenizer import Word2VecTokenizer
 from common import utils
@@ -34,7 +35,8 @@ def analyze_vocab_coverage():
         logging.info(f"Processing {split} split...")
         for row in ms_marco_data[split]:
             # Process query
-            query_words = row["query"].lower().split()
+            row_dict = dict(row)  # Convert to dict for proper type handling
+            query_words = str(row_dict["query"]).lower().split()
             for word in query_words:
                 ms_marco_words.add(word)
                 total_tokens += 1
@@ -42,13 +44,17 @@ def analyze_vocab_coverage():
                     oov_tokens += 1
 
             # Process passages
-            for passage_text in row["passages"]["passage_text"]:
-                passage_words = passage_text.lower().split()
-                for word in passage_words:
-                    ms_marco_words.add(word)
-                    total_tokens += 1
-                    if word not in word2vec_vocab:
-                        oov_tokens += 1
+            passages = row_dict["passages"]
+            if isinstance(passages, dict) and "passage_text" in passages:
+                passage_texts = passages["passage_text"]
+                if isinstance(passage_texts, list):
+                    for passage_text in passage_texts:
+                        passage_words = str(passage_text).lower().split()
+                        for word in passage_words:
+                            ms_marco_words.add(word)
+                            total_tokens += 1
+                            if word not in word2vec_vocab:
+                                oov_tokens += 1
 
     # Calculate coverage statistics
     ms_marco_vocab_size = len(ms_marco_words)
@@ -73,13 +79,19 @@ def analyze_vocab_coverage():
     uncovered_counter = Counter()
     for split in ["train", "validation", "test"]:
         for row in ms_marco_data[split]:
-            for word in row["query"].lower().split():
+            row_dict = dict(row)  # Convert to dict for proper type handling
+            for word in str(row_dict["query"]).lower().split():
                 if word not in word2vec_vocab:
                     uncovered_counter[word] += 1
-            for passage_text in row["passages"]["passage_text"]:
-                for word in passage_text.lower().split():
-                    if word not in word2vec_vocab:
-                        uncovered_counter[word] += 1
+
+            passages = row_dict["passages"]
+            if isinstance(passages, dict) and "passage_text" in passages:
+                passage_texts = passages["passage_text"]
+                if isinstance(passage_texts, list):
+                    for passage_text in passage_texts:
+                        for word in str(passage_text).lower().split():
+                            if word not in word2vec_vocab:
+                                uncovered_counter[word] += 1
 
     for word, count in uncovered_counter.most_common(20):
         logging.info(f"  {word}: {count:,}")

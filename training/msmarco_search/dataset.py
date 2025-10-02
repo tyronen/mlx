@@ -2,7 +2,7 @@ import numpy as np
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-DATASET_FILE = "data/datasets.pt"
+DATASET_FILE = "data/ms_marco_data.pt"
 
 
 def cosine_similarity(vec1, vec2):

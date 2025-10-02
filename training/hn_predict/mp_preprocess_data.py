@@ -14,10 +14,10 @@ from tqdm import tqdm
 from common import utils
 from common.utils import tokenize_text
 from models.hn_predict_utils import (
-    VOCAB_PATH,
     POSTS_FILE,
     SCALER_PATH,
     TRAINING_VOCAB_PATH,
+    WORD_TO_IX_PATH,
     load_user_data,
     process_row,
 )
@@ -178,7 +178,7 @@ def main():
     OUTPUT_DIR = "data"
     NUM_WORKERS = min(8, os.cpu_count() or 8)
 
-    with open(VOCAB_PATH, "r") as f:
+    with open(WORD_TO_IX_PATH, "r") as f:
         w2i = json.load(f)
     if "UNK" not in w2i:
         w2i["UNK"] = 0

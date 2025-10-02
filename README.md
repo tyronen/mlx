@@ -17,7 +17,7 @@ python -m training.train_mnist_cnn --model_path data/mnist_cnn.pth
 
 ### On the dev machine
 
-`python -m training.hn_predict.prepare_vocab` prepares preliminary word indices used to train title embeddings.
+`python -m training.hn_predict.prepare_indices` prepares preliminary word indices used to train title embeddings.
 
 `python -m training.hn_predict.process_items` takes the OpenPipe/HackerNews dataset and backfills a lot of user data - at post time! into it and creates a new file, `data/posts.parquet`. This needs large RAM and disk space but no GPU.
 
@@ -70,3 +70,16 @@ scp ui_prod.sh <server>:ui_prod.sh
 # on server
 ./ui_prod.sh
 ```
+
+## Week 2 - MS Marco Search
+
+1. On your dev machine, run `python -m training.msmarco_search.word2vec_prereq`.
+2. Upload the directory `data/msmarco_search` to your GPU.
+3. On the GPU run `python -m training.msmarco_search.word2vec`
+4. Download `data/word2vec_skipgram.pth` back to dev
+5. On dev, run `python -m training.msmarco_search.preprocess_data`
+6. Upload `data/ms_marco_data.pt` back to GPU.
+7. On GPU run `python -m training.msmarco_search.train_models`
+8. Download `data/twin_towers.pth` from GPU.
+9. On the UX machine run `python -m training.store_documents`
+10. Run inference - TODO may have to replace dockerfile with docker compose, need Redis on Lightsail

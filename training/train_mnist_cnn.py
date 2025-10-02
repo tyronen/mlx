@@ -61,17 +61,17 @@ def main():
             v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
             # add mouse-like behaviour
-            v2.RandomAffine(degrees=10, translate=(0.1, 0.1)),
+            v2.RandomAffine(degrees=(-10, 10), translate=(0.1, 0.1)),
         ]
     )
 
-    root = os.environ.get("HF_DATASETS_CACHE")
-    training_data = tqdm(
-        datasets.MNIST(root=root, train=True, download=True, transform=transform)
+    root = os.environ.get("HF_DATASETS_CACHE") or "./data"
+    training_data = datasets.MNIST(
+        root=root, train=True, download=True, transform=transform
     )
 
-    test_data = tqdm(
-        datasets.MNIST(root=root, train=False, download=True, transform=transform)
+    test_data = datasets.MNIST(
+        root=root, train=False, download=True, transform=transform
     )
     train_dataloader = DataLoader(training_data, batch_size=64, shuffle=True)
     test_dataloader = DataLoader(test_data, batch_size=64, shuffle=False)

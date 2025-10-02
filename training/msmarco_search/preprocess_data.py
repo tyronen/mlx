@@ -37,7 +37,7 @@ def main():
     device = utils.get_device()
 
     logging.info("Loading MS MARCO dataset...")
-    ms_marco_data = load_dataset("ms_marco", "v1.1")
+    ms_marco_data = load_dataset("microsoft/ms_marco", "v1.1")
 
     logging.info("Building document frequency...")
     df, N = build_doc_freq(ms_marco_data)

@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from dataset import DATASET_FILE
 from models import msmarco_search
-from tokenizer import Word2VecTokenizer
+from models.msmarco_tokenizer import Word2VecTokenizer
 
 # ------------- additional imports -------------
 import random
@@ -112,7 +112,7 @@ def mine_hard_negatives(
                     # Mask out positive documents and find hardest negative
                     masked_sims = q_sims.masked_fill(~non_pos_mask, float("-inf"))
                     top_idx = masked_sims.argmax()
-                    mapping[q_text] = all_doc_texts[top_idx.item()]
+                    mapping[q_text] = all_doc_texts[int(top_idx.item())]
                 else:
                     # Fallback: use random negative if no non-positive docs
                     mapping[q_text] = random.choice(
@@ -342,7 +342,7 @@ def main():
     }
     run = wandb.init(
         # Set the wandb entity where your project will be logged (generally your team name).
-        entity="mlx-institute",
+        entity="tyronenicholas",
         # Set the wandb project where this run will be logged.
         project="TwoTowers",
         # Track hyperparameters and run metadata.

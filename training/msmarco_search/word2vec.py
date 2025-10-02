@@ -1,4 +1,4 @@
-import argparse
+# type: ignore[reportPrivateImportUsage]
 import json
 import logging
 import os
@@ -14,8 +14,10 @@ import wandb
 from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
+from models.msmarco_tokenizer import WORD2VEC_FILE
 
 from common import utils
+
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.set_float32_matmul_precision("high")
@@ -31,23 +33,6 @@ hyperparameters = {
     "patience": 10000,
     "batch_size": 8192,
 }
-
-parser = argparse.ArgumentParser(
-    description="Train skipgram word2vec model with negative sampling."
-)
-parser.add_argument(
-    "--model",
-    default="data/word2vec_skipgram.pth",
-    help="Output file to save embeddings",
-)
-parser.add_argument(
-    "--preproc_dir",
-    default="data",
-    help="Directory containing indices.int32.npy, counts.int64.npy, vocab.json",
-)
-args = parser.parse_args()
-
-outfile = args.model
 
 pair_count = 0
 
@@ -139,19 +124,19 @@ def main():
     )
 
     # === Build vocab ===
-    pre = args.preproc_dir
+    pre = WORD2VEC_DIR
     idx_path = os.path.join(pre, "indices.int32.npy")
     counts_path = os.path.join(pre, "counts.int64.npy")
-    vocab_path = os.path.join(pre, "vocab.json")
+    word_to_ix_path = os.path.join(pre, "word_to_ix.json")
     assert (
         os.path.exists(idx_path)
         and os.path.exists(counts_path)
-        and os.path.exists(vocab_path)
+        and os.path.exists(word_to_ix_path)
     )
 
     indices = np.memmap(idx_path, dtype=np.int32, mode="r")
     counts = np.load(counts_path)
-    with open(vocab_path, "r", encoding="utf-8") as f:
+    with open(word_to_ix_path, "r", encoding="utf-8") as f:
         word_to_ix = json.load(f)
     ix_to_word = {int(v): k for k, v in word_to_ix.items()}  # for saving
 
@@ -300,9 +285,9 @@ def main():
                 "word_to_ix": word_to_ix,
                 "ix_to_word": ix_to_word,
             },
-            outfile,
+            WORD2VEC_FILE,
         )
-        logging.info(f"✅ Embeddings saved to {outfile}")
+        logging.info(f"✅ Embeddings saved to {WORD2VEC_FILE}")
     run.finish(0)
 
 
