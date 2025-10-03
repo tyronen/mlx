@@ -3,7 +3,7 @@ from datasets import load_dataset
 import torch
 from tqdm import tqdm
 
-from dataset import TripletDataset, DATASET_FILE
+from .dataset import TripletDataset, DATASET_FILE
 from common import utils
 from models import msmarco_tokenizer
 

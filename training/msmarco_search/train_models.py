@@ -2,22 +2,24 @@ import logging
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 
 import wandb
 from tqdm import tqdm
 from common import utils
 from torch.utils.data import DataLoader
 import numpy as np
-from dataset import DATASET_FILE
 from models import msmarco_search
 from models.msmarco_tokenizer import Word2VecTokenizer
+from .dataset import DATASET_FILE
+from .word2vec import EMBED_DIM
 
 # ------------- additional imports -------------
 import random
 
 hyperparameters = {
-    "embed_dim": 300,
+    "embed_dim": EMBED_DIM,
     "margin": 0.3,
     "query_learning_rate": 2e-5,
     "doc_learning_rate": 1e-5,
@@ -405,7 +407,7 @@ def main():
                 total_norm = torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
             else:
-                with autocast():
+                with autocast(device_type=device.type):
                     loss, correct = training_loop_core(
                         batch, query_tower, doc_tower, all_train_margins
                     )

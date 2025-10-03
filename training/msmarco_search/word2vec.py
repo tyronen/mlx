@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader, IterableDataset
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 from models.msmarco_tokenizer import WORD2VEC_FILE
+from .word2vec_prereq import WORD2VEC_DIR
 
 from common import utils
 
@@ -24,10 +25,12 @@ torch.set_float32_matmul_precision("high")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
+EMBED_DIM = 400
+
 hyperparameters = {
     "min_freq": 35,
     "context_size": 2,
-    "embed_dim": 400,
+    "embed_dim": EMBED_DIM,
     "epochs": 2,
     "learning_rate": 3e-3,
     "patience": 10000,

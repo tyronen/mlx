@@ -4,7 +4,7 @@
 
 PORTS=$(runpodctl get pod -a | tail -n 1 | awk -F\t '{print $12}')
 echo $PORTS
-SSH_LINE=$(echo "$PORTS" | tr ',' '\n' | fgrep "pub")
+SSH_LINE=$(echo "$PORTS" | tr ',' '\n' | fgrep "pub" | fgrep "22")
 echo $SSH_LINE
 IP_ADDR=$(echo $SSH_LINE | cut -d: -f1)
 echo $IP_ADDR
@@ -41,6 +41,10 @@ Host $REMOTE
 
 EOF
 
+# Add the host key to known_hosts to avoid interactive prompts
+echo "Adding host key to known_hosts..."
+ssh-keyscan -p $PORT $IP_ADDR >> ~/.ssh/known_hosts
+
 scp ssh.sh "$REMOTE:ssh.sh"
 scp .env "$REMOTE:.env"
 scp .tmux.conf "$REMOTE:.tmux.conf"
@@ -50,7 +54,7 @@ echo "Executing setup script on remote server..."
 ssh "$REMOTE" "chmod +x ssh.sh && ./ssh.sh"
 
 function send() {
-    rsync -vrt "$1/*" "$REMOTE:/workspace/mlx/$1"
+    rsync -vrt "$1" "$REMOTE:/workspace/mlx/"
 }
 
 send common

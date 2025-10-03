@@ -8,5 +8,5 @@ cd /workspace/mlx
 
 pip install --upgrade pip
 source .env
-wandb login $WANDB_API_KEY
 source setup.sh
+wandb login $WANDB_API_KEY
