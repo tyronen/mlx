@@ -18,12 +18,6 @@ from models.msmarco_tokenizer import Word2VecTokenizer
 # eg. from the model files name
 model_version = "0.1.0"
 
-# Set the log path.
-# This should be a directory that is writable by the application.
-# In a docker container, you can use /var/log/ as the directory.
-# Mount this directory to a volume on the host machine to persist the logs.
-log_dir_path = "/var/log/app"
-log_path = f"{log_dir_path}/V-{model_version}.log"
 
 utils.setup_logging()
 device = utils.get_device()
@@ -36,7 +30,9 @@ query_tower = msmarco_search.QueryTower(
     dropout_rate=checkpoint["dropout_rate"],
 ).to(device)
 query_tower.load_state_dict(checkpoint["query_tower"])
-redis_client: redis.Redis = redis.Redis(host="redis-stack", port=6379, db=0)
+redis_host = os.getenv("REDIS_HOST", "localhost")
+redis_port = int(os.getenv("REDIS_PORT", "6379"))
+redis_client: redis.Redis = redis.Redis(host=redis_host, port=redis_port, db=0)
 
 
 # Define the endpoints
@@ -46,10 +42,6 @@ def ping():
 
 def version():
     return {"version": model_version}
-
-
-def logs():
-    return read_logs(log_path)
 
 
 def search(query):
@@ -104,7 +96,6 @@ def search(query):
         "MatchesGroundTruth": has_match,
     }
 
-    log_request(log_path, json.dumps(message))
     return response
 
 
@@ -121,11 +112,6 @@ def do_search(query, query_tower, redis_client, tokenizer, device, top_k=5):
         query_embedding_bytes = struct.pack(
             f"<{len(query_embedding)}f", *query_embedding
         )
-
-        # --- START DEBUG CODE ---
-        # Save the numpy array to a file for external verification
-        np.save("debug_query_vector.npy", query_embedding)
-        # --- END DEBUG CODE ---
 
     redis_query = f"*=>[KNN {top_k} @embedding $vec_param AS vector_score]"
     query_obj = (
@@ -234,20 +220,3 @@ def get_random_query() -> Dict[str, Any]:
     random_query = random.choice(query_list)
 
     return search(random_query)
-
-
-##### Log The Request #####
-def log_request(log_path, message):
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    with open(log_path, "a") as log_file:
-        log_file.write(message + "\n")
-
-
-##### Read The Logs #####
-def read_logs(log_path):
-    # read the logs from the log_path
-    if not os.path.exists(log_path):
-        return []
-    with open(log_path, "r") as log_file:
-        lines = log_file.readlines()
-    return [line.strip() for line in lines]

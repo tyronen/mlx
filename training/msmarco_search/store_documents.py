@@ -1,4 +1,7 @@
 import logging
+from pathlib import Path
+import shutil
+import time
 
 import redis
 import numpy as np
@@ -79,7 +82,9 @@ def encode_all_documents(tokenizer, doc_tower, documents, device, batch_size=100
     doc_metadata = []
 
     with torch.no_grad():
-        for i in tqdm(range(0, len(documents), batch_size), desc="Encoding documents"):
+        for i in tqdm(
+            range(0, len(documents) // 20, batch_size), desc="Encoding documents"
+        ):
             batch_docs = documents[i : i + batch_size]
             batch_texts = [doc["text"] for doc in batch_docs]
 
@@ -164,7 +169,6 @@ def store_query_mappings_in_redis(
 
 
 def create_redis_index(redis_client, dim):
-
     try:
         redis_client.ft("doc_index").dropindex(delete_documents=False)
     except Exception:
@@ -177,11 +181,26 @@ def create_redis_index(redis_client, dim):
             VectorField(
                 "embedding",
                 "FLAT",
-                {"TYPE": "FLOAT32", "DIM": dim, "DISTANCE_METRIC": "COSINE"},
+                {
+                    "TYPE": "FLOAT32",
+                    "DIM": dim,
+                    "DISTANCE_METRIC": "COSINE",
+                },
             ),
         ],
         definition=IndexDefinition(prefix=["doc:"], index_type=IndexType.HASH),
     )
+
+
+def create_redis_dump(redis_client):
+    """Create a Redis dump file for production"""
+    logging.info("💾 Creating Redis dump...")
+    try:
+        redis_client.save()
+
+    except Exception as e:
+        logging.error(f"❌ Failed to create Redis dump: {e}")
+        return None
 
 
 def main():
@@ -220,6 +239,7 @@ def main():
     redis_client.set("total_docs", len(doc_metadata))
     redis_client.set("total_queries", len(query_to_positive_docs))
     logging.info("Document cache setup complete!")
+    create_redis_dump(redis_client)
 
 
 if __name__ == "__main__":

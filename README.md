@@ -39,27 +39,17 @@ A simple server environment like AWS Lightsail will do the job.
 
 1. Install Docker Engine on your server. Docker should be runnable by someone other than root. Follow the instructions on the Docker website.
 2. Docker Desktop on your dev machine must have containerd enabled.
-3. Create a file `.env.prod` on the server containing:
-
-```
-RUNPOD_API_KEY=<your RunPod api key>
-RUNPOD_ENDPOINT="https://api.runpod.ai/v2/<runpod-serverless-endpoint-id>/runsync"
-```
-
-3. Debug locally. You need to override the port. Copy `.env.prod` to `.env.dev` and add the line `PORT=8000`. Then:
+3. Debug locally.
 
 ```
 export ENV=./.env.dev
 ./ui_dev.sh
 ```
 
-4. Build on your dev machine:
-
-Docker must be running.
+4. Build full image on your dev machine:
 
 ```
-./build.sh ui
-# test locally
+./build.sh
 ./ui_staging.sh
 ```
 
@@ -67,6 +57,7 @@ Docker must be running.
 
 ```
 scp ui_prod.sh <server>:ui_prod.sh
+scp docker-compose.prod.yml <server>:docker-compose.prod.yml
 # on server
 ./ui_prod.sh
 ```

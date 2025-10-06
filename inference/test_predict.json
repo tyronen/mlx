@@ -1,8 +1,0 @@
-  {
-    "input": {
-      "action": "predict",
-      "payload": {
-        "png_b64": "iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAAAAABXZoBIAAAAI0lEQVR4nGNgGGSAkYGBgYHhPw5xbACmlgmfsaOSQ05y0AEAMocCIU4FegMAAAAASUVORK5CYII="
-      }
-    }
-  }

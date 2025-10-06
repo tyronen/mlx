@@ -1,12 +1,9 @@
 import streamlit as st
 import random
 from datasets import load_dataset, Dataset
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Dict, List, Tuple, Any
 
 from ui.msmarco_search.main import search
-
-# Configure Streamlit page
-st.set_page_config(page_title="MS MARCO Query Tester", page_icon="🔍", layout="wide")
 
 
 @st.cache_data
@@ -77,20 +74,19 @@ def main() -> None:
         st.error(f"Failed to load MS MARCO dataset: {str(e)}")
         return
 
-    # Sidebar with controls
-    st.sidebar.header("Controls")
+    st.header("Controls")
 
     # Manual query input option
-    st.sidebar.subheader("Manual Query")
-    manual_query = st.sidebar.text_input("Enter your own query:")
-    if st.sidebar.button("Search Manual Query") and manual_query:
+    st.subheader("Manual Query")
+    manual_query = st.text_input("Enter your own query:")
+    if st.button("Search Manual Query") and manual_query:
         st.session_state.current_query = manual_query
         st.session_state.current_item = None
         st.session_state.search_results = None
 
     # Random query selection
-    st.sidebar.subheader("Random Query from MS MARCO")
-    if st.sidebar.button("🎲 Find Random Query", type="primary"):
+    st.subheader("Random Query from MS MARCO")
+    if st.button("🎲 Find Random Query", type="primary"):
         random_idx = random.randint(0, len(dataset) - 1)
         row = dataset[random_idx]  # type: ignore
 
@@ -125,7 +121,7 @@ def main() -> None:
         )
 
         # Search button
-        if st.button("🔍 Search with FastAPI", type="primary"):
+        if st.button("🔍 Search", type="primary"):
             with st.spinner("Searching..."):
                 results: Dict[str, Any] = search(st.session_state.current_query)
                 st.session_state.search_results = results
@@ -257,11 +253,11 @@ def main() -> None:
                 )
 
     else:
-        st.info("👈 Click 'Find Random Query' in the sidebar to get started!")
+        st.info("👈 Click 'Find Random Query' to get started!")
 
         # Show some dataset statistics
         st.header("📈 Dataset Information")
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
 
         with col1:
             st.metric("Total Queries", f"{len(dataset):,}")
@@ -273,11 +269,6 @@ def main() -> None:
                 len(item["passages"]["passage_text"]) for item in sample_items  # type: ignore
             ) / len(sample_items)
             st.metric("Avg Passages per Query", f"{avg_passages:.1f}")
-
-        with col3:
-            st.metric(
-                "FastAPI Status", "🟢 Ready" if True else "🔴 Down"
-            )  # You could add a health check here
 
 
 if __name__ == "__main__":

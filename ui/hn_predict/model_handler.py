@@ -21,7 +21,7 @@ utils.setup_logging()
 def get_full_model_preprocessor():
     """Load necessary data"""
     # Use the same vocab mapping as used during training
-    with open(hn_predict_utils.VOCAB_PATH, "r") as f:
+    with open(hn_predict_utils.WORD_TO_IX_PATH, "r") as f:
         w2i = json.load(f)
     if "UNK" not in w2i:
         w2i["UNK"] = 0

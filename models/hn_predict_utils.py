@@ -10,7 +10,7 @@ import tldextract
 from common import utils
 
 TRAINING_VOCAB_PATH = "data/train_vocab.json"
-WORD_TO_IX_PATH = "data/word_to_ix.json"
+WORD_TO_IX_PATH = "data/hn_predict/word_to_ix.json"
 POSTS_FILE = "data/posts.parquet"
 SCALER_PATH = "data/scaler.npz"
 CACHE_FILE = "data/inference_cache.pkl"
