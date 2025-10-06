@@ -16,11 +16,11 @@ def load_msmarco_dataset() -> Dataset:
 
 def format_similarity_score(score: float) -> str:
     """Format similarity score with color coding"""
-    if score > 0.8:
+    if score > 0.7:
         return f"🟢 **{score:.3f}**"
-    elif score > 0.6:
+    elif score > 0.5:
         return f"🟡 **{score:.3f}**"
-    elif score > 0.4:
+    elif score > 0.3:
         return f"🟠 **{score:.3f}**"
     else:
         return f"🔴 **{score:.3f}**"
@@ -76,27 +76,29 @@ def main() -> None:
 
     st.header("Controls")
 
-    # Manual query input option
-    st.subheader("Manual Query")
-    manual_query = st.text_input("Enter your own query:")
-    if st.button("Search Manual Query") and manual_query:
-        st.session_state.current_query = manual_query
-        st.session_state.current_item = None
-        st.session_state.search_results = None
+    random_col, manual_col = st.columns(2)
 
-    # Random query selection
-    st.subheader("Random Query from MS MARCO")
-    if st.button("🎲 Find Random Query", type="primary"):
-        random_idx = random.randint(0, len(dataset) - 1)
-        row = dataset[random_idx]  # type: ignore
+    with manual_col:
+        st.subheader("Manual Query")
+        manual_query = st.text_input("Enter your own query:")
+        if st.button("Search Manual Query") and manual_query:
+            st.session_state.current_query = manual_query
+            st.session_state.current_item = None
+            st.session_state.search_results = None
 
-        st.session_state.current_query = row["query"]
-        passages = row["passages"]
-        pos_index = passages["is_selected"].index(1)
-        st.session_state.positive_text = passages["passage_text"][pos_index]
-        st.session_state.current_item = row
-        st.session_state.random_idx = random_idx
-        st.session_state.search_results = None
+    with random_col:
+        st.subheader("Random Query from MS MARCO")
+        if st.button("🎲 Find Random Query", type="primary"):
+            random_idx = random.randint(0, len(dataset) - 1)
+            row = dataset[random_idx]  # type: ignore
+
+            st.session_state.current_query = row["query"]
+            passages = row["passages"]
+            pos_index = passages["is_selected"].index(1)
+            st.session_state.positive_text = passages["passage_text"][pos_index]
+            st.session_state.current_item = row
+            st.session_state.random_idx = random_idx
+            st.session_state.search_results = None
 
     # Display current query
     if hasattr(st.session_state, "current_query"):
@@ -120,11 +122,9 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-        # Search button
-        if st.button("🔍 Search", type="primary"):
-            with st.spinner("Searching..."):
-                results: Dict[str, Any] = search(st.session_state.current_query)
-                st.session_state.search_results = results
+        with st.spinner("Searching..."):
+            results: Dict[str, Any] = search(st.session_state.current_query)
+            st.session_state.search_results = results
 
         # Display results
         if (
