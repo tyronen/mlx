@@ -57,7 +57,7 @@ export ENV=./.env.dev
 
 ```
 scp ui_prod.sh <server>:ui_prod.sh
-scp docker-compose.prod.yml <server>:docker-compose.prod.yml
+scp docker-compose.yml <server>:docker-compose.yml
 # on server
 ./ui_prod.sh
 ```

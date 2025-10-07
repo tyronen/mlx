@@ -1,19 +1,12 @@
-FROM python:3.11-slim
+FROM pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime
+# Install your requirements
+COPY ui/requirements.txt .
+RUN pip install -r requirements.txt
 
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install production dependencies with optimizations
-COPY ui/requirements.txt .
-RUN pip install --no-cache-dir --prefer-binary -r requirements.txt && \
-    pip cache purge
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/data/hn_predict /app/common /app/models /app/ui /data
@@ -33,10 +26,5 @@ COPY data/redis_dump.rdb /app/data/
 COPY common/ /app/common/
 COPY models/ /app/models/
 COPY ui/ /app/ui/
-
-# Production optimizations
-RUN find /app -name "*.pyc" -delete && \
-    find /app -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-
 
 EXPOSE 80
