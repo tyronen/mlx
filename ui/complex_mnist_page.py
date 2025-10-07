@@ -8,22 +8,22 @@ from PIL import Image, ImageOps
 from streamlit_drawable_canvas import st_canvas
 from torchvision import transforms
 
-import models
-import utils
+from common import utils
+from models import complex_mnist
 
 device = utils.get_device()
 
 
 @st.cache_resource
 def load_model():
-    checkpoint = torch.load(utils.COMPLEX_MODEL_FILE, map_location=device)
+    checkpoint = torch.load(complex_mnist.COMPLEX_MODEL_FILE, map_location=device)
     config = checkpoint["config"]
 
     # keep only the arguments that ComplexTransformer’s __init__ expects
-    ctor_keys = inspect.signature(models.ComplexTransformer).parameters
+    ctor_keys = inspect.signature(complex_mnist.ComplexTransformer).parameters
     ctor_cfg = {k: v for k, v in config.items() if k in ctor_keys}
 
-    model = models.ComplexTransformer(**ctor_cfg)
+    model = complex_mnist.ComplexTransformer(**ctor_cfg)
 
     # Strip torch.compile prefixes if present
     state_dict = checkpoint["model_state_dict"]
@@ -114,8 +114,6 @@ def make_canvas(key_index):
 
 
 def main():
-    if "prediction" not in st.session_state:
-        st.session_state.prediction = None
     if "has_prediction" not in st.session_state:
         st.session_state.has_prediction = False
     if "canvas_keys" not in st.session_state:
@@ -179,7 +177,7 @@ def main():
         </style>
         """
     )
-    left, right = st.columns(2, gap=None)
+    left, right = st.columns(2)
     with left:
         canvasTL = make_canvas(0)
         canvasBL = make_canvas(2)
@@ -200,16 +198,16 @@ def main():
         with torch.no_grad():
             # greedy autoregressive decode – predict up to 4 digits
             input_seq = torch.full(
-                (1, 5), utils.BLANK_TOKEN, device=device, dtype=torch.long
+                (1, 5), complex_mnist.BLANK_TOKEN, device=device, dtype=torch.long
             )
-            input_seq[0, 0] = utils.START_TOKEN
+            input_seq[0, 0] = complex_mnist.START_TOKEN
 
             output_digits = []
             for pos in range(4):  # decoder positions 0…3
                 logits = model(composite, input_seq)  # (1, 5, vocab)
                 next_token = logits[0, pos].argmax().item()
 
-                if next_token == utils.END_TOKEN:
+                if next_token == complex_mnist.END_TOKEN:
                     break
 
                 output_digits.append(next_token)

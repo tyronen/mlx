@@ -56,10 +56,7 @@ export ENV=./.env.dev
 5. Start on your server:
 
 ```
-scp ui_prod.sh <server>:ui_prod.sh
-scp docker-compose.yml <server>:docker-compose.yml
-# on server
-./ui_prod.sh
+./deploy.sh
 ```
 
 ## Week 2 - MS Marco Search
@@ -72,5 +69,9 @@ scp docker-compose.yml <server>:docker-compose.yml
 6. Upload `data/ms_marco_data.pt` back to GPU.
 7. On GPU run `python -m training.msmarco_search.train_models`
 8. Download `data/twin_towers.pth` from GPU.
-9. On the UX machine run `python -m training.store_documents`
-10. Run inference - TODO may have to replace dockerfile with docker compose, need Redis on Lightsail
+9. On the UX machine run `./ui_dev.sh`
+10. While Redis and the webserver are running, run `python -m training.store_documents`. This builds the index.
+11. Test the Docker setup with `./ui_staging.sh`
+12. If it works, push it with `./deploy.sh`
+
+# Week 3
