@@ -25,7 +25,7 @@ echo "🔍 Detecting system package versions..."
 echo "# This file is auto-generated to constrain torch and numpy to the system versions." > training/constraints.txt
 
 # Define the path to the system's Python executable
-PY_SYSTEM="/usr/bin/python3.11"
+PY_SYSTEM="/usr/local/bin/python"
 
 # Execute Python commands to get the exact version strings
 function getversion() {

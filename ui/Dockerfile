@@ -21,6 +21,7 @@ COPY data/best_quantile.pth /app/data/
 COPY data/word2vec_skipgram.pth /app/data/
 COPY data/twin_towers.pth /app/data/
 COPY data/redis_dump.rdb /app/data/
+COPY data/complex_mnist.pth /app/data/
 
 # Copy source code
 COPY common/ /app/common/

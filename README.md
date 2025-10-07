@@ -74,4 +74,15 @@ export ENV=./.env.dev
 11. Test the Docker setup with `./ui_staging.sh`
 12. If it works, push it with `./deploy.sh`
 
-# Week 3
+# Week 3 - 4-way image recogniser
+
+```
+# dev machine
+python -m training.complex_mnist.create_composite_images
+rsync data/composite*.pt <GPU>:/<path>/data/
+# GPU
+python -m training.complex_mnist.train_complex_model
+# dev machine
+rsync <GPU>L:/path/data/complex_mnist.pth data/
+./ui_dev.sh
+```

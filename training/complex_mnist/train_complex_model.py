@@ -4,16 +4,15 @@ from typing import Optional
 import torch
 from torch import nn, optim
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import ReduceLROnPlateau, LRScheduler
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, TensorDataset
 import logging
 import subprocess
 
 from tqdm import tqdm
 
-import utils
-from utils import END_TOKEN, BLANK_TOKEN
-from models import ComplexTransformer
+from common import utils
+from models import complex_mnist
 import wandb
 
 hyperparameters = {
@@ -31,17 +30,11 @@ hyperparameters = {
     "train_pe": True,
 }
 
-parser = argparse.ArgumentParser(description="Train simple model")
-parser.add_argument("--entity", help="W and B entity", default="mlx-institute")
+parser = argparse.ArgumentParser(description="Train complex model")
+parser.add_argument("--entity", help="W and B entity", default="tyronenicholas")
 parser.add_argument("--project", help="W and B project", default="encoder-decoder")
 args = parser.parse_args()
 
-
-def get_git_commit():
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("ascii").strip()
-    except Exception:
-        return "unknown"
 
 def make_dataloader(path, device, shuffle):
     tensors = torch.load(path, map_location="cpu")
@@ -96,7 +89,7 @@ def run_batch(
                 )  # (B*seq_len)
 
                 total_loss += loss
-                mask = output_seqs != END_TOKEN
+                mask = output_seqs != complex_mnist.END_TOKEN
                 pred = logits.argmax(-1)
                 batch_num_correct_digits = ((pred == output_seqs) & mask).sum().item()
                 num_correct_digits += batch_num_correct_digits
@@ -151,7 +144,7 @@ def run_single_training(config=None):
     train_dataloader = make_dataloader("data/composite_train.pt", device, shuffle=True)
     val_dataloader = make_dataloader("data/composite_val.pt", device, shuffle=False)
     test_dataloader = make_dataloader("data/composite_test.pt", device, shuffle=False)
-    model = ComplexTransformer(
+    model = complex_mnist.ComplexTransformer(
         patch_size=hyperparameters["patch_size"],
         model_dim=hyperparameters["model_dim"],
         ffn_dim=hyperparameters["ffn_dim"],
@@ -174,7 +167,7 @@ def run_single_training(config=None):
     )
 
     # if we stopped early and have a checkpoint, load it
-    checkpoint = torch.load(utils.COMPLEX_MODEL_FILE)
+    checkpoint = torch.load(complex_mnist.COMPLEX_MODEL_FILE)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     test_token_accuracy, test_seq_accuracy, test_loss = run_batch(
@@ -199,7 +192,6 @@ def run_single_training(config=None):
 def main():
     utils.setup_logging()
     config = dict(hyperparameters)  # makes a shallow copy
-    config["git_commit"] = get_git_commit()
     run = wandb.init(
         entity=args.entity,
         project=args.project,
@@ -208,7 +200,7 @@ def main():
 
     run_single_training(hyperparameters)
     artifact = wandb.Artifact(name="complex_model", type="model")
-    artifact.add_file(utils.COMPLEX_MODEL_FILE)
+    artifact.add_file(complex_mnist.COMPLEX_MODEL_FILE)
     run.log_artifact(artifact)
     run.finish(0)
 
@@ -265,7 +257,7 @@ def run_training(
                 "model_state_dict": model.state_dict(),
                 "config": config,
             }
-            torch.save(model_dict, utils.COMPLEX_MODEL_FILE)
+            torch.save(model_dict, complex_mnist.COMPLEX_MODEL_FILE)
         else:
             epochs_since_best += 1
         if epochs_since_best >= config["patience"] or best_loss == 0:

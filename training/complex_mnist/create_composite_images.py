@@ -4,11 +4,11 @@ from torchvision import datasets
 from torchvision.transforms import v2
 import random
 import os
-import utils
+from common import utils
 from tqdm import tqdm
 import logging
 
-from utils import START_TOKEN, END_TOKEN, BLANK_TOKEN
+from models import complex_mnist
 
 
 # Define special tokens
@@ -34,7 +34,7 @@ def create_composite_image(mnist_images, mnist_labels, num_images):
 
     for pos, is_filled in zip(positions, filled):
         if not is_filled:
-            labels.append(BLANK_TOKEN)
+            labels.append(complex_mnist.BLANK_TOKEN)
             continue
         # Place the 28x28 MNIST image at the selected position
         y, x = pos
@@ -55,15 +55,15 @@ def create_transformer_seqs(labels):
 
     # Input sequence: [START_TOKEN, label1, label2]
     # We don't truncate the labels, because this is now a fixed length
-    input_seq = [START_TOKEN] + labels
+    input_seq = [complex_mnist.START_TOKEN] + labels
 
     # Output sequence: [label1, label2, ..., END_TOKEN]
-    output_seq = labels + [END_TOKEN]
+    output_seq = labels + [complex_mnist.END_TOKEN]
 
     return torch.tensor(input_seq), torch.tensor(output_seq)
 
 
-def generate_composite_dataset(mnist_dataset, size, distribution):
+def generate_composite_dataset(mnist_dataset, size):
     """Generate composite dataset with given size and distribution"""
     composite_images = []
     input_seqs = []
@@ -142,9 +142,9 @@ def save_torch_dataset(images, input_seqs, output_seqs, filepath):
             "input_seqs": input_seqs,
             "output_seqs": output_seqs,
             "vocab_info": {
-                "start_token": START_TOKEN,
-                "end_token": END_TOKEN,
-                "blank_token": BLANK_TOKEN,
+                "start_token": complex_mnist.START_TOKEN,
+                "end_token": complex_mnist.END_TOKEN,
+                "blank_token": complex_mnist.BLANK_TOKEN,
                 "vocab_size": 13,  # 0-9 digits + START + END + PAD
             },
         },
@@ -187,12 +187,9 @@ def main():
     original_train_size = len(training_data)  # 60,000
     test_size = len(test_data)  # 10,000
 
-    # Distribution: 40% have 4 images, 30% have 3, 20% have 2, 10% have 1
-    distribution = [0.4, 0.3, 0.2, 0.1]
-
     logging.info("Generating composite training dataset...")
     all_train_images, all_train_input_seqs, all_train_output_seqs = (
-        generate_composite_dataset(training_data, original_train_size, distribution)
+        generate_composite_dataset(training_data, original_train_size)
     )
 
     logging.info("Splitting training set into train/validation (80%/20%)...")
@@ -209,7 +206,7 @@ def main():
 
     logging.info("Generating composite test dataset...")
     test_images, test_input_seqs, test_output_seqs = generate_composite_dataset(
-        test_data, test_size, distribution
+        test_data, test_size
     )
 
     # Save datasets

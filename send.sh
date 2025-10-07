@@ -57,6 +57,7 @@ function send() {
     rsync -vrt "$1" "$REMOTE:/workspace/mlx/"
 }
 
+send setup.sh
 send common
 send training
 send ui
