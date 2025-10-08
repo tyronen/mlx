@@ -14,8 +14,8 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-import models
-import utils
+from models import urban_sounds
+from common import utils
 
 # --- Hyperparameters ---
 hyperparameters = {
@@ -36,7 +36,7 @@ hyperparameters = {
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(description="Train a model for audio classification.")
-parser.add_argument("--entity", default="mlx-institute", help="WandB entity")
+parser.add_argument("--entity", default="tyronenicholas", help="WandB entity")
 parser.add_argument(
     "--check", action="store_true", help="Run a quick check with one epoch."
 )
@@ -62,7 +62,9 @@ def is_main_process():
 
 def get_model_file_path(test_fold: int) -> str:
     """Generates a unique path for each fold's checkpoint."""
-    base = models.ENCODER_MODEL_PATH if args.encoder else models.CNN_MODEL_PATH
+    base = (
+        urban_sounds.ENCODER_MODEL_PATH if args.encoder else urban_sounds.CNN_MODEL_PATH
+    )
     return base.replace(".pth", f"_fold_{test_fold + 1}.pth")
 
 
@@ -100,7 +102,7 @@ class UrbanSoundDataset(Dataset):
 
 def setup_data():
     """Loads the dataset using the preprocessed metadata."""
-    metadata_path = f"{utils.SPECTROGRAM_DIR}/metadata.json"
+    metadata_path = f"{urban_sounds.SPECTROGRAM_DIR}/metadata.json"
     full_dataset = UrbanSoundDataset(metadata_path=metadata_path)
 
     # The fold information is now in the metadata, so we create fold indices from it.
@@ -136,6 +138,11 @@ def get_fold_dataloaders(
         Subset(dataset, test_indices),
     )
 
+    if is_main_process():
+        logging.info(
+            f"Fold {test_fold + 1}: Train={len(train_subset)}, Val={len(val_subset)}, Test={len(test_subset)}"
+        )
+
     ## DDP Note: Use DistributedSampler if DDP is active.
     is_ddp = dist.is_initialized()
     train_sampler = DistributedSampler(train_subset) if is_ddp else None
@@ -143,7 +150,7 @@ def get_fold_dataloaders(
 
     device = utils.get_device()
     pin_memory = device.type == "cuda"
-    num_workers = min(os.cpu_count(), 8) if pin_memory else 0
+    num_workers = min(os.cpu_count() or 8, 8) if pin_memory else 0
 
     train_dl = DataLoader(
         train_subset,
@@ -270,7 +277,7 @@ def run_fold_training(
 
 def get_model(config):
     if args.encoder:
-        return models.AudioTransformer(
+        return urban_sounds.AudioTransformer(
             model_dim=config["model_dim"],
             ffn_dim=config["ffn_dim"],
             num_heads=config["num_heads"],
@@ -278,7 +285,7 @@ def get_model(config):
             dropout=config["dropout"],
             patch_size=config["patch_size"],
         )
-    return models.CNN()
+    return urban_sounds.CNN()
 
 
 def run_single_fold(dataset, fold_indices, test_fold, config, device):
@@ -288,13 +295,8 @@ def run_single_fold(dataset, fold_indices, test_fold, config, device):
         dataset, fold_indices, test_fold, val_fold, config
     )
 
-    if is_main_process():
-        logging.info(
-            f"Fold {test_fold + 1}: Train={len(train_dl.dataset)}, Val={len(val_dl.dataset)}, Test={len(test_dl.dataset)}"
-        )
-
     model = get_model(config).to(device)
-    ## DDP Note: Wrap model in DDP if active. `find_unused_parameters` can help with complex models.
+    ## DDP Note: Wrap model in DDP if active. `find_unused_parameters` can help with complex urban_sounds.
     if dist.is_initialized():
         model = DDP(model, device_ids=[device], find_unused_parameters=False)
 

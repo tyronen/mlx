@@ -3,13 +3,13 @@ import os
 import json
 import multiprocessing
 from functools import partial
-import utils
+from common import utils
 import torch
-import torchaudio.transforms as T
+from torchaudio.transforms import Resample, MelSpectrogram
 import datasets
 from tqdm import tqdm
 
-from utils import SPECTROGRAM_DIR
+from models.urban_sounds import SPECTROGRAM_DIR
 
 
 def preprocess_audio(audio_array, sample_rate=22050, n_mels=64, max_duration=4.0):
@@ -24,7 +24,7 @@ def preprocess_audio(audio_array, sample_rate=22050, n_mels=64, max_duration=4.0
 
     target_sr = 22_050
     if sample_rate != target_sr:
-        resampler = T.Resample(orig_freq=sample_rate, new_freq=target_sr)
+        resampler = Resample(orig_freq=sample_rate, new_freq=target_sr)
         audio_tensor = resampler(audio_tensor)
         sample_rate = target_sr
 
@@ -35,7 +35,7 @@ def preprocess_audio(audio_array, sample_rate=22050, n_mels=64, max_duration=4.0
         padding = max_samples - len(audio_tensor)
         audio_tensor = torch.nn.functional.pad(audio_tensor, (0, padding))
 
-    mel_transform = T.MelSpectrogram(
+    mel_transform = MelSpectrogram(
         sample_rate=sample_rate, n_mels=n_mels, n_fft=2048, hop_length=512
     )
     mel_spec = mel_transform(audio_tensor)

@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 import numpy as np
 from starlette.websockets import WebSocket, WebSocketDisconnect
-import utils
+from common import utils
 
 
 @asynccontextmanager

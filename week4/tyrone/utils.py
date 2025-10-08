@@ -3,8 +3,6 @@ from contextlib import nullcontext
 import torch
 from torch.amp import autocast, GradScaler
 
-SPECTROGRAM_DIR = "/tmp/processed_spectrograms"
-
 
 def setup_logging():
     logging.basicConfig(

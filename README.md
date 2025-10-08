@@ -86,3 +86,15 @@ python -m training.complex_mnist.train_complex_model
 rsync <GPU>L:/path/data/complex_mnist.pth data/
 ./ui_dev.sh
 ```
+
+# Week 4a - Urban sounds
+
+```
+# GPU
+python -m training.urban_sounds.audio_data
+python -m traiing.urban_sounds.train_model
+```
+
+This was demonstration exercise which merely attempted to train the model, not use it.
+
+# Week 4b - Audio transcode
