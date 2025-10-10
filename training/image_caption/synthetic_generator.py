@@ -131,13 +131,23 @@ def generate_captions(device, model, processor, batch, profile=False):
 
     # Decode the response
     start = time.time()
-    # We only want to decode the newly generated tokens, not the prompt
-    input_token_len = inputs["input_ids"].shape[1]
-    generated_token_ids = generated_ids[:, input_token_len:]
-    captions = processor.batch_decode(
-        generated_token_ids,
-        skip_special_tokens=True,
-    )
+
+    # The previous string-based parsing was unreliable due to padding tokens being decoded.
+    # A more robust method is to slice the generated tokens for each item in the batch
+    # using the attention mask to determine the true length of the prompt.
+    captions = []
+    prompt_lengths = torch.sum(inputs["attention_mask"], dim=1)
+
+    for i in range(generated_ids.shape[0]):
+        prompt_len = prompt_lengths[i]
+        generated_part = generated_ids[i, prompt_len:]
+        caption = processor.decode(
+            generated_part,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+        )
+        captions.append(caption.strip())
+
     timings["decoding"] = time.time() - start
 
     if profile:
@@ -226,7 +236,7 @@ def main():
                         f"GPU Memory before: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
                     )
             # We're still just testing accuracy
-            if batch_idx > 1:
+            if batch_idx > 0:
                 break
 
             captions = generate_captions(
