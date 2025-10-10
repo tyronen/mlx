@@ -9,13 +9,16 @@ from transformers import (
     WhisperProcessor,
     WhisperTimeStampLogitsProcessor,
 )
-from transformers.utils import is_flash_attn_2_available
+from transformers.utils.import_utils import is_flash_attn_2_available
 import uvicorn
 
-from typing import Optional
+from typing import Optional, Dict, Any, List, Tuple
 
 import os
 from pathlib import Path
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,8 +32,24 @@ from common import utils
 async def lifespan(_: FastAPI):
     utils.setup_logging()
     # 1. Load your model object (so you can grab its generation_config)
-    model = WhisperForConditionalGeneration.from_pretrained(MODEL_NAME)
-    _load_pipeline(model)
+    logging.info(f"Loading model: {MODEL_NAME}")
+    try:
+        model = WhisperForConditionalGeneration.from_pretrained(
+            MODEL_NAME,
+            resume_download=True,
+            force_download=False,
+            local_files_only=False,
+            trust_remote_code=True,
+        )
+        _load_pipeline(model)
+        logging.info("Model loaded successfully")
+    except Exception as e:
+        logging.error(f"Failed to load model: {e}")
+        logging.info("This might be a network issue on RunPod. Try:")
+        logging.info("1. Check your internet connection")
+        logging.info("2. Try a smaller model like 'openai/whisper-tiny.en'")
+        logging.info("3. Pre-download the model locally")
+        raise
     yield
 
 
@@ -60,7 +79,7 @@ app.add_middleware(
 # openai/whisper-large-v3-turbo: 809m
 # openai/whisper-large-v3: 1550m, 8.4
 
-MODEL_NAME = os.getenv("WHISPER_MODEL_NAME", "openai/whisper-large-v3")
+MODEL_NAME = os.getenv("WHISPER_MODEL_NAME", "openai/whisper-tiny.en")
 DEVICE_PREFERENCE = utils.get_device().type
 
 asr_pipe: Optional[Pipeline] = None
@@ -193,16 +212,14 @@ def _load_pipeline(model) -> None:
     asr_pipe = pipeline(
         task="automatic-speech-recognition",
         model=model,
-        torch_dtype=torch.float16 if device_str == "cuda" else torch.float32,
+        tokenizer=MODEL_NAME,
+        feature_extractor=MODEL_NAME,
+        dtype=torch.float16 if device_str == "cuda" else torch.float32,
         device=device_str,
         model_kwargs=attn_impl,
         chunk_length_s=ROLLING_WINDOW_SEC,
         stride_length_s=STRIDE_INTERVAL_SEC,
         return_timestamps="word",
-        config=config,
-        processor=processor,
-        feature_extractor=processor.feature_extractor,
-        tokenizer=processor.tokenizer,
         generate_kwargs={
             "task": "transcribe",
             "logits_processor": [ts_processor],
@@ -233,18 +250,21 @@ rolling_window_samples = ROLLING_WINDOW_SEC * SAMPLE_RATE
 
 def transcribe_pipeline(rolling_buffer, buffer_duration):
     global asr_pipe
+    if asr_pipe is None:
+        raise RuntimeError("ASR pipeline not loaded")
+
     result = asr_pipe(rolling_buffer)
-    text = result["text"].strip()
-    chunks = result.get("chunks", [])
-    tokens = [c["text"] for c in chunks]
-    word_timestamps = [c["timestamp"] for c in chunks]
+    text: str = result["text"].strip()  # type: ignore
+    chunks: List[Dict[str, Any]] = result.get("chunks", [])  # type: ignore
+    tokens: List[str] = [c["text"] for c in chunks]
+    word_timestamps: List[Tuple[float, float]] = [c["timestamp"] for c in chunks]
     # Detect incomplete timestamps and fall back if needed
     if any(len(ts) != 2 for ts in word_timestamps):
         logging.warning(
             "Incomplete timestamp detected; falling back to uniform timing."
         )
         raw = asr_pipe(rolling_buffer, return_timestamps=False)
-        text = raw["text"].strip()
+        text = raw["text"].strip()  # type: ignore
         tokens = text.split()
         word_timestamps = []
         for i in range(len(tokens)):
@@ -255,7 +275,7 @@ def transcribe_pipeline(rolling_buffer, buffer_duration):
 
 
 def transcribe(buf, chunk_id, received_samples, buffer_duration):
-    global asr_pipe, asr_model
+    global asr_pipe
     silence = np.zeros(int(0.25 * SAMPLE_RATE), dtype=np.int16)
     buf = np.concatenate((buf, silence))
     rolling_buffer = buf.astype(np.float32) / 32768.0
@@ -310,7 +330,7 @@ async def websocket_pcm(websocket: WebSocket):
 
     # Make sure the ASR model is loaded
     global asr_pipe
-    if asr_pipe is None and asr_model is None:
+    if asr_pipe is None:
         await websocket.close(code=1011, reason="ASR model not ready")
         return
 
@@ -405,9 +425,16 @@ async def train(audio: UploadFile = File(...), transcript: str = Form(...)):
     processor = asr_pipe.processor
 
     # Encode audio and target
-    input_features = asr_pipe.feature_extractor(
-        audio_np, sampling_rate=SAMPLE_RATE, return_tensors="pt"
-    ).input_features.to(model.device)
+    try:
+        # Try the newer processor interface first
+        input_features = processor(  # type: ignore
+            audio_np, sampling_rate=SAMPLE_RATE, return_tensors="pt"
+        ).input_features.to(model.device)
+    except AttributeError:
+        # Fallback to older processor interface
+        input_features = processor.feature_extractor(  # type: ignore
+            audio_np, sampling_rate=SAMPLE_RATE, return_tensors="pt"
+        ).input_features.to(model.device)
 
     # Convert dtype if model expects float16 (half precision)
     if model.dtype == torch.float16:
@@ -417,11 +444,18 @@ async def train(audio: UploadFile = File(...), transcript: str = Form(...)):
     else:
         input_features = input_features.float()
 
-    labels = (
-        processor(text=transcript, return_tensors="pt")
-        .input_ids.to(model.device)
-        .long()
-    )
+    try:
+        # Try the newer processor interface first
+        labels = (
+            processor(transcript, return_tensors="pt").input_ids.to(model.device).long()  # type: ignore
+        )
+    except AttributeError:
+        # Fallback to older processor interface
+        labels = (
+            processor.tokenizer(transcript, return_tensors="pt")  # type: ignore
+            .input_ids.to(model.device)
+            .long()
+        )
 
     # Standard training loop for a single step
     model.train()
@@ -479,7 +513,7 @@ async def train(audio: UploadFile = File(...), transcript: str = Form(...)):
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     uvicorn.run(
-        "server:app",
+        "api.server:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8888")),
         proxy_headers=True,

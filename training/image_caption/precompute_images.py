@@ -1,9 +1,8 @@
 import os
 from tqdm import tqdm
-import models
+from models import image_caption, image_caption_utils
 import torch
 from torch.utils.data import Dataset, DataLoader
-import utils
 
 from PIL import Image
 
@@ -30,10 +29,10 @@ def collate_fn(batch):
 
 def main():
     # Load ViT
-    model = models.VitEncoder()
+    model = image_caption.VitEncoder()
     model.eval()
 
-    imagepath, image_filenames, _ = utils.get_captions()
+    imagepath, image_filenames, _ = image_caption_utils.get_captions()
 
     # Dataset and DataLoader
     dataset = ViTFeatureDataset(image_filenames, f"{imagepath}/Images")
@@ -50,13 +49,13 @@ def main():
 
     # Save
     # Ensure the output directory exists
-    output_dir = os.path.dirname(models.IMAGES_PATH)
+    output_dir = os.path.dirname(image_caption.IMAGES_PATH)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
-    if os.path.exists(models.IMAGES_PATH):
-        os.remove(models.IMAGES_PATH)
-    torch.save(features, models.IMAGES_PATH)
-    print(f"Saved {len(features)} image embeddings to {models.IMAGES_PATH}")
+    if os.path.exists(image_caption.IMAGES_PATH):
+        os.remove(image_caption.IMAGES_PATH)
+    torch.save(features, image_caption.IMAGES_PATH)
+    print(f"Saved {len(features)} image embeddings to {image_caption.IMAGES_PATH}")
 
 
 if __name__ == "__main__":

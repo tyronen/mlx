@@ -2,6 +2,14 @@
 
 Portfolio of projects written during the MLX Institute course
 
+## Build environment
+
+This was built running on a Mac (Silicon) as the dev machine and a RunPod Ubuntu instance with GPU.
+
+Because RunPods are rented for only a few hours at a time, every time you start a new instance, run `./setup_dev.sh`. This assumes you have only one RunPod instance, it queries for that and creates an entry in your `~/.ssh/config` pointing to it. You are also assumed to have a Network Volume on it mounted at `/workspace/`.
+
+We do not set up a Git repo directly on the pod; merely use `rsync` to copy code and data between dev machine and pod.
+
 ## Week 0 - CNN over MNist data
 
 Week 0's project (written before the course started) was to use CNN to do single-digit recognition on the MNIST data set.
@@ -87,7 +95,14 @@ rsync <GPU>L:/path/data/complex_mnist.pth data/
 ./ui_dev.sh
 ```
 
-# Week 4a - Urban sounds
+# Week 4 - Image captioner
+
+```
+python -m training.image_caption.precompute_images
+python -m training.image_caption.train_models
+```
+
+# Week 5a - Urban sounds
 
 ```
 # GPU
@@ -97,4 +112,4 @@ python -m traiing.urban_sounds.train_model
 
 This was demonstration exercise which merely attempted to train the model, not use it.
 
-# Week 4b - Audio transcode
+# Week 5b - Audio transcode

@@ -45,20 +45,12 @@ EOF
 echo "Adding host key to known_hosts..."
 ssh-keyscan -p $PORT $IP_ADDR >> ~/.ssh/known_hosts
 
-scp ssh.sh "$REMOTE:ssh.sh"
+scp init_pod.sh "$REMOTE:init_pod.sh"
 scp .env "$REMOTE:.env"
 scp .tmux.conf "$REMOTE:.tmux.conf"
 
 # Execute ssh.sh on the remote server
 echo "Executing setup script on remote server..."
-ssh "$REMOTE" "chmod +x ssh.sh && ./ssh.sh"
+ssh "$REMOTE" "chmod +x init_pod.sh && ./init_pod.sh"
 
-function send() {
-    rsync -vrt "$1" "$REMOTE:/workspace/mlx/"
-}
-
-send setup.sh
-send common
-send training
-send ui
-send data
+./copyfiles.sh

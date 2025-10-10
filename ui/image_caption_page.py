@@ -4,9 +4,9 @@ import requests
 from PIL import Image
 import io
 import logging
-import models
+from models import image_caption, image_caption_utils
 import time
-import utils
+from common import utils
 
 # Suppress warnings
 utils.setup_logging()
@@ -17,9 +17,13 @@ DEVICE = utils.get_device()
 
 
 def load_model(custom):
-    filename = utils.CUSTOM_MODEL_FILE if custom else utils.BASE_MODEL_FILE
+    filename = (
+        image_caption_utils.CUSTOM_MODEL_FILE
+        if custom
+        else image_caption_utils.BASE_MODEL_FILE
+    )
     checkpoint = torch.load(filename, map_location=DEVICE)
-    model = models.CombinedTransformer(
+    model = image_caption.CombinedTransformer(
         model_dim=checkpoint["model_dim"],
         ffn_dim=checkpoint["ffn_dim"],
         num_heads=checkpoint["num_heads"],
@@ -36,7 +40,7 @@ def load_model(custom):
 @st.cache_resource
 def load_models():
     """Load the trained model"""
-    vit_encoder = models.VitEncoder()
+    vit_encoder = image_caption.VitEncoder()
     custom_model = load_model(custom=True)
     base_model = load_model(custom=False)
     st.success("Model loaded successfully!")

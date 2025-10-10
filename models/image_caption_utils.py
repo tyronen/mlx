@@ -1,8 +1,5 @@
-import logging
-from contextlib import nullcontext
 import kagglehub
 import torch
-from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import csv
@@ -19,29 +16,6 @@ TOKENIZER.pad_token = TOKENIZER.eos_token
 # Set BOS token to EOS token if it doesn't exist
 if TOKENIZER.bos_token is None:
     TOKENIZER.bos_token = TOKENIZER.eos_token
-
-
-def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S"
-    )
-
-
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        return torch.device("mps")
-    else:
-        return torch.device("cpu")
-
-
-def amp_components(device, train=False):
-    if device.type == "cuda" and train:
-        return autocast(), GradScaler()
-    else:
-        # fall-back: no automatic casting, dummy scaler
-        return nullcontext(), GradScaler(enabled=False)
 
 
 def get_captions():

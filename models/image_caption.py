@@ -10,7 +10,8 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from peft import LoraConfig, get_peft_model
-import utils
+import image_caption_utils
+from common import utils
 
 CLIP = "openai/clip-vit-base-patch32"
 VIT = "google/vit-base-patch16-224-in21k"
@@ -21,7 +22,7 @@ import numpy as np
 
 class Flickr30kDataset(Dataset):
     def __init__(self, split="train"):
-        _, unique_images, rows = utils.get_captions()
+        _, unique_images, rows = image_caption_utils.get_captions()
 
         # Split the images (not the individual caption rows) into train/val/test
         np.random.seed(42)  # reproducible splits
@@ -42,7 +43,7 @@ class Flickr30kDataset(Dataset):
         # Keep only caption rows whose image belongs to the chosen split
         self.captions = [row for row in rows if row["image"] in split_images]
 
-        self.tokenizer = utils.TOKENIZER
+        self.tokenizer = image_caption_utils.TOKENIZER
         self.image_features = torch.load(IMAGES_PATH, weights_only=False)
 
     def __len__(self):
@@ -206,7 +207,9 @@ def make_attn_mask(input_ids: torch.Tensor):
     Returns:
         mask: [B, extra_prefix + T] long tensor, 1 = keep, 0 = pad
     """
-    txt_mask = (input_ids != utils.TOKENIZER.pad_token_id).long()  # 1/0 over text
+    txt_mask = (
+        input_ids != image_caption_utils.TOKENIZER.pad_token_id
+    ).long()  # 1/0 over text
     prefix = torch.ones(
         input_ids.size(0),
         1,
@@ -228,14 +231,15 @@ class CombinedTransformer(nn.Module):
     ):
         super().__init__()
 
-        self.tokenizer = utils.TOKENIZER
+        self.tokenizer = image_caption_utils.TOKENIZER
         bnb_config = BitsAndBytesConfig(
             load_in_8bit=True,
-            llm_int8_threshold=6.0,           # typical defaults
+            llm_int8_threshold=6.0,  # typical defaults
             llm_int8_has_fp16_weight=False,
         )
         base = AutoModelForCausalLM.from_pretrained(
-            "Qwen/Qwen3-0.6B-Base", trust_remote_code=True,     
+            "Qwen/Qwen3-0.6B-Base",
+            trust_remote_code=True,
             quantization_config=bnb_config,
             device_map="auto",
         )
@@ -262,8 +266,8 @@ class CombinedTransformer(nn.Module):
             self.token_proj = nn.Linear(self.token_embedding.embedding_dim, model_dim)
         else:
             config = LoraConfig(
-               task_type="CAUSAL_LM",
-                r=8,                # LoRA rank
+                task_type="CAUSAL_LM",
+                r=8,  # LoRA rank
                 lora_alpha=16,
                 lora_dropout=0.05,
             )
@@ -291,7 +295,7 @@ class CombinedTransformer(nn.Module):
         )
         return out.logits
 
-    # one autoregressive step for inference 
+    # one autoregressive step for inference
     def decode_step(self, image_features, input_ids):
         """
         Args:
@@ -323,7 +327,9 @@ class CombinedTransformer(nn.Module):
         img_embed = self.image_projection(img_encoded).unsqueeze(1)  # [B, 1, D]
 
         # Prepend image embedding to caption embeddings
-        decoder_input = torch.cat([img_embed.to(tok_embed.dtype), tok_embed[:, :-1, :]], dim=1)
+        decoder_input = torch.cat(
+            [img_embed.to(tok_embed.dtype), tok_embed[:, :-1, :]], dim=1
+        )
 
         # Use input_ids without the last token so the mask length matches decoder_input (image + L‑1 text tokens)
         return self.decode_image(decoder_input, input_ids[:, :-1])

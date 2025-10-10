@@ -72,3 +72,4 @@ export TMPDIR=/dev/shm
 #PY
 
 pip install -r training/requirements.txt -c training/constraints.txt
+pip install -r api/requirements.txt -c training/constraints.txt

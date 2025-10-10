@@ -5,14 +5,12 @@ import torch.optim as optim
 import argparse
 import wandb
 from tqdm import tqdm
-import utils
-import models
-import subprocess
+from common import utils
+from models import image_caption, image_caption_utils
 import bitsandbytes.optim as bnb_optim
-from utils import CustomDataLoader
 
 parser = argparse.ArgumentParser(description="Train simple model")
-parser.add_argument("--entity", help="W and B entity", default="mlx-institute")
+parser.add_argument("--entity", help="W and B entity", default="tyronenicholas")
 parser.add_argument("--base", help="Whether to use base decoder", action="store_true")
 parser.add_argument("--sweep", help="Run a sweep", action="store_true")
 parser.add_argument("--check", help="Make sure it works", action="store_true")
@@ -97,15 +95,11 @@ def loss_fn(batch, model, label_smoothing):
     vocab_size = shift_logits.size(-1)
     loss = F.cross_entropy(
         shift_logits.view(-1, vocab_size),
-        shift_labels.view(-1), 
+        shift_labels.view(-1),
         ignore_index=model.tokenizer.pad_token_id,
         label_smoothing=label_smoothing,
     )
     return loss
-
-
-def get_git_commit():
-    return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("ascii").strip()
 
 
 def main():
@@ -114,18 +108,17 @@ def main():
         wandb.agent(sweep_id, function=run_training)
     else:
         config = dict(hyperparameters)  # makes a shallow copy
-        config["git_commit"] = get_git_commit()
         run_training(config)
 
 
-def run_training(config=None, **_):
+def run_training(config, **_):
     utils.setup_logging()
     device = utils.get_device()
 
     model_file = (
-        utils.CUSTOM_MODEL_FILE
+        image_caption_utils.CUSTOM_MODEL_FILE
         if config["use_custom_decoder"]
-        else utils.BASE_MODEL_FILE
+        else image_caption_utils.BASE_MODEL_FILE
     )
 
     project = "custom-decoder" if config["use_custom_decoder"] else "base-decoder"
@@ -139,19 +132,19 @@ def run_training(config=None, **_):
     if config is None:
         config = dict(wandb.config)
 
-    train_dataset = models.Flickr30kDataset(split="train")
-    validation_dataset = models.Flickr30kDataset(split="val")
-    test_dataset = models.Flickr30kDataset(split="test")
+    train_dataset = image_caption.Flickr30kDataset(split="train")
+    validation_dataset = image_caption.Flickr30kDataset(split="val")
+    test_dataset = image_caption.Flickr30kDataset(split="test")
     logging.info(
         f"Dataset sizes: training {len(train_dataset)} validation: {len(validation_dataset)} test: {len(test_dataset)}"
     )
-    training_dataloader = CustomDataLoader(
+    training_dataloader = image_caption_utils.CustomDataLoader(
         train_dataset, device, batch_size=config["batch_size"], train=True
     )
-    validation_dataloader = CustomDataLoader(
+    validation_dataloader = image_caption_utils.CustomDataLoader(
         validation_dataset, device, batch_size=config["batch_size"]
     )
-    test_dataloader = CustomDataLoader(
+    test_dataloader = image_caption_utils.CustomDataLoader(
         test_dataset, device, batch_size=config["batch_size"]
     )
 
@@ -159,7 +152,7 @@ def run_training(config=None, **_):
     total_steps = len(training_dataloader) * config["epochs"]
 
     maybe_autocast, scaler = utils.amp_components(device, True)
-    model = models.CombinedTransformer(
+    model = image_caption.CombinedTransformer(
         model_dim=config["model_dim"],
         ffn_dim=config["ffn_dim"],
         num_heads=config["num_heads"],
@@ -176,9 +169,9 @@ def run_training(config=None, **_):
         },
     ]
     optimizer = bnb_optim.Adam8bit(
-    filter(lambda p: p.requires_grad, model.parameters()), 
-    lr=config["learning_rate"]
-)
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=config["learning_rate"],
+    )
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=total_steps, eta_min=1e-6
     )
@@ -213,7 +206,11 @@ def run_training(config=None, **_):
                 del loss, batch
 
         logging.info(f"Epoch {epoch + 1}/{config['epochs']}")
-        avg_train_loss = total_train_loss / num_train_batches if num_train_batches > 0 else total_train_loss
+        avg_train_loss = (
+            total_train_loss / num_train_batches
+            if num_train_batches > 0
+            else total_train_loss
+        )
         avg_val_loss = validate_model(
             model, validation_dataloader, epoch, device, config
         )
