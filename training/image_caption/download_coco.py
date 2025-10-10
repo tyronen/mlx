@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Download COCO dataset - much faster and higher quality than Wikimedia Commons.
 No rate limiting, hosted on Microsoft Azure CDN.
@@ -8,7 +7,7 @@ import asyncio
 import httpx
 import time
 from pathlib import Path
-import utils
+from common import utils
 from tqdm import tqdm
 import logging
 import requests
@@ -127,7 +126,7 @@ async def download_sample(sample_images, max_connections=50):
 
     # Conservative connection limits
     limits = httpx.Limits(max_keepalive_connections=50, max_connections=50)
-    
+
     async with httpx.AsyncClient(
         http2=True,
         headers={"User-Agent": USER_AGENT},
@@ -147,8 +146,8 @@ async def download_sample(sample_images, max_connections=50):
                 async with rate_limiter:
                     # Small delay to spread out requests
                     await asyncio.sleep(0.05)  # 50ms delay between requests
-                    success, download_time, write_time, size = await _download_one_async(
-                        img, client
+                    success, download_time, write_time, size = (
+                        await _download_one_async(img, client)
                     )
                     if success and size > 0:
                         download_times.append(download_time)

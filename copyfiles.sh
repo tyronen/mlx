@@ -6,7 +6,7 @@ function send() {
     rsync -vrt "$1" "$REMOTE:/workspace/mlx/$2"
 }
 
-send setup.sh
+send build_env.sh
 send api
 send common
 send models

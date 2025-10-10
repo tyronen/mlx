@@ -10,6 +10,12 @@ Because RunPods are rented for only a few hours at a time, every time you start 
 
 We do not set up a Git repo directly on the pod; merely use `rsync` to copy code and data between dev machine and pod.
 
+We use RunPod's ramdisk (in `/dev/shm/`) as the cache for HuggingFace and other downloads to save time. Back this up to permanent storage before terminating your pod to the day:
+
+```
+rsync -vrt /dev/shm /workspace/ramdiskbackup/
+```
+
 ## Week 0 - CNN over MNist data
 
 Week 0's project (written before the course started) was to use CNN to do single-digit recognition on the MNIST data set.
@@ -40,8 +46,6 @@ These scripts produce two final input files: `train.pt` and `val.pt`. Upload the
 Run `python -m training.hn_predict.train_hurdle_model` to actually train the model. The best output will be in `data/best_quantile_epoch_n.pth` choose the highest value of `n` from the most recent run. Download this to your deployment machine for inference.
 
 ### Inference
-
-## UX server
 
 A simple server environment like AWS Lightsail will do the job.
 
@@ -82,7 +86,7 @@ export ENV=./.env.dev
 11. Test the Docker setup with `./ui_staging.sh`
 12. If it works, push it with `./deploy.sh`
 
-# Week 3 - 4-way image recogniser
+## Week 3 - 4-way image recogniser
 
 ```
 # dev machine
@@ -95,14 +99,14 @@ rsync <GPU>L:/path/data/complex_mnist.pth data/
 ./ui_dev.sh
 ```
 
-# Week 4 - Image captioner
+## Week 4 - Image captioner
 
 ```
 python -m training.image_caption.precompute_images
 python -m training.image_caption.train_models
 ```
 
-# Week 5a - Urban sounds
+## Week 5a - Urban sounds
 
 ```
 # GPU
@@ -112,4 +116,4 @@ python -m traiing.urban_sounds.train_model
 
 This was demonstration exercise which merely attempted to train the model, not use it.
 
-# Week 5b - Audio transcode
+## Week 5b - Audio transcode

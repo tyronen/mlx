@@ -10,7 +10,7 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from peft import LoraConfig, get_peft_model
-import image_caption_utils
+from models import image_caption_utils
 from common import utils
 
 CLIP = "openai/clip-vit-base-patch32"
