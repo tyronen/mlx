@@ -4,7 +4,8 @@ import torch
 import pathlib
 import csv
 from torch.utils.data import Dataset
-import utils
+from models import image_caption_utils
+from common import utils
 from tqdm import tqdm
 
 LLM = "Qwen/Qwen2.5-VL-3B-Instruct"
@@ -80,7 +81,9 @@ def main():
     processor = AutoProcessor.from_pretrained(LLM)
 
     coco_dataset = CocoDataset()
-    dataloader = utils.CustomDataLoader(coco_dataset, device, batch_size=64)
+    dataloader = image_caption_utils.CustomDataLoader(
+        coco_dataset, device, batch_size=64
+    )
 
     synthetic_dataset = dict()
     for batch in tqdm(dataloader):
