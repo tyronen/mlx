@@ -219,7 +219,7 @@ def main():
     utils.setup_logging()
     os.makedirs("data/coco", exist_ok=True)
 
-    sample_images = get_coco_urls(60000)
+    sample_images = get_coco_urls(64 * 3)
     if sample_images:
         asyncio.run(download_sample(sample_images))
     else:

@@ -44,7 +44,6 @@ getversion numpy
 getversion torchvision
 
 echo "🎉 Success! 'training/constraints.txt' has been created."
-pip uninstall flash-attn flash_attn -y
 
 # cd /workspace/flash-attention
 
@@ -73,3 +72,4 @@ export TMPDIR=/dev/shm
 
 pip install -r training/requirements.txt -c training/constraints.txt
 pip install -r api/requirements.txt -c training/constraints.txt
+pip install flash-attn --no-build-isolation

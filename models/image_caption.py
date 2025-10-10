@@ -175,23 +175,23 @@ class CustomDecoder(nn.Module):
         return self.linear(input)  # [B, L-1, vocab]
 
 
-class VitEncoder(nn.Module):
+class ImageEncoder(nn.Module):
     def __init__(self):
         super().__init__()
         self.device = utils.get_device()
-        self.vit_processor = AutoProcessor.from_pretrained(VIT, use_fast=False)
-        self.vit_model = AutoModel.from_pretrained(VIT, use_safetensors=True).to(
+        self.processor = AutoProcessor.from_pretrained(CLIP, use_fast=False)
+        self.model = AutoModel.from_pretrained(CLIP, use_safetensors=True).to(
             self.device
         )
 
         # Freeze the pre-trained weights
-        for param in self.vit_model.parameters():
+        for param in self.model.parameters():
             param.requires_grad = False
 
     def forward(self, images):
-        inputs = self.vit_processor(images=images, return_tensors="pt").to(self.device)
+        inputs = self.processor(images=images, return_tensors="pt").to(self.device)
         with torch.no_grad():
-            outputs = self.vit_model(**inputs).last_hidden_state.mean(dim=1)
+            outputs = self.model(**inputs).last_hidden_state.mean(dim=1)
         return outputs
 
 

@@ -29,7 +29,7 @@ def collate_fn(batch):
 
 def main():
     # Load ViT
-    model = image_caption.VitEncoder()
+    model = image_caption.ImageEncoder()
     model.eval()
 
     imagepath, image_filenames, _ = image_caption_utils.get_captions()

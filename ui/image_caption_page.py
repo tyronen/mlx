@@ -40,7 +40,7 @@ def load_model(custom):
 @st.cache_resource
 def load_models():
     """Load the trained model"""
-    vit_encoder = image_caption.VitEncoder()
+    vit_encoder = image_caption.ImageEncoder()
     custom_model = load_model(custom=True)
     base_model = load_model(custom=False)
     st.success("Model loaded successfully!")
