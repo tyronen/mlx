@@ -28,17 +28,13 @@ class CocoDataset(Dataset):
 
 
 def generate_captions(device, model, processor, batch, profile=False):
-    timings = {}
 
     # Load and process the images
-    start = time.time()
     images = []
     for image_path in batch:
         images.append(Image.open(image_path).convert("RGB"))
-    timings["image_loading"] = time.time() - start
 
     # Create per-image conversations (batched) for chat template
-    start = time.time()
     conversations = [
         [
             {
@@ -50,39 +46,27 @@ def generate_captions(device, model, processor, batch, profile=False):
                         "text": "Describe this image precisely and concisely in a single sentence.",
                     },
                 ],
-            }
+            },
         ]
         for image in images
     ]
-    timings["message_creation"] = time.time() - start
 
     # Apply chat template (batched)
-    start = time.time()
     texts = processor.apply_chat_template(
         conversations, tokenize=False, add_generation_prompt=True
     )
-    timings["chat_template"] = time.time() - start
 
     # Process inputs
-    start = time.time()
     inputs = processor(
         text=texts,
         images=images,
         return_tensors="pt",
         padding=True,
     )
-    timings["input_processing"] = time.time() - start
 
     # Move to device
-    start = time.time()
     inputs = inputs.to(device)
-    timings["device_transfer"] = time.time() - start
 
-    # Generate caption with detailed timing breakdown
-    start = time.time()
-
-    # Pre-generation setup timing
-    setup_start = time.time()
     generation_kwargs = {
         "max_new_tokens": 128,
         "do_sample": False,
@@ -91,7 +75,8 @@ def generate_captions(device, model, processor, batch, profile=False):
         "num_beams": 1,
         "early_stopping": False,
     }
-    # Prefer model-specific end token if available (e.g., <|im_end|> for chat)
+    # With pad_token configured correctly, we expect the model to use the proper
+    # end-of-turn token for chat/instruct-tuned models.
     try:
         im_end_id = processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
         if (
@@ -102,7 +87,6 @@ def generate_captions(device, model, processor, batch, profile=False):
             generation_kwargs["eos_token_id"] = im_end_id
     except Exception:
         pass
-    setup_time = time.time() - setup_start
 
     # Actual generation timing with CUDA sync for accuracy
     gen_start = time.time()
@@ -114,13 +98,9 @@ def generate_captions(device, model, processor, batch, profile=False):
         torch.cuda.synchronize()
     gen_time = time.time() - gen_start
 
-    timings["generation"] = time.time() - start
-
     if profile:
         print(f"  Generation breakdown:")
-        print(f"    Setup: {setup_time:.3f}s")
         print(f"    Model forward: {gen_time:.3f}s")
-        print(f"    Total generation: {timings['generation']:.3f}s")
         print(
             f"    Input shapes: {[(k, v.shape if hasattr(v, 'shape') else type(v)) for k, v in inputs.items()]}"
         )
@@ -129,34 +109,98 @@ def generate_captions(device, model, processor, batch, profile=False):
             f"    Generated length: {generated_ids.shape[1] - inputs['input_ids'].shape[1]} tokens"
         )
 
-    # Decode the response
-    start = time.time()
-
-    # The previous string-based parsing was unreliable due to padding tokens being decoded.
-    # A more robust method is to slice the generated tokens for each item in the batch
-    # using the attention mask to determine the true length of the prompt.
+    # The issue: input has padding tokens, attention mask includes them,
+    # and using attention_mask sum lands us in the padding, not at the real prompt end.
+    # Solution: Find where "<|im_start|>assistant\n" ends and split there.
     captions = []
-    prompt_lengths = torch.sum(inputs["attention_mask"], dim=1)
+
+    # Get the token IDs we need to search for
+    im_start_id = processor.tokenizer.convert_tokens_to_ids("<|im_start|>")
+    assistant_tokens = processor.tokenizer.encode("assistant", add_special_tokens=False)
+    # The newline is encoded as a specific token. We can get it by encoding a newline.
+    newline_tokens = processor.tokenizer.encode("\n", add_special_tokens=False)
+    newline_id = newline_tokens[0] if newline_tokens else None
+
+    if profile:
+        print(f"\n=== Token ID Debug ===")
+        print(f"im_start_id: {im_start_id}")
+        print(f"assistant_tokens: {assistant_tokens}")
+        print(f"newline_id: {newline_id}")
+
+    # Debug: Files we're specifically interested in
+    debug_files = {"000000002001.jpg", "000000005758.jpg", "000000015303.jpg"}
 
     for i in range(generated_ids.shape[0]):
-        prompt_len = prompt_lengths[i]
-        generated_part = generated_ids[i, prompt_len:]
+        gen_ids = generated_ids[i].tolist()
+
+        # Find the last occurrence of <|im_start|>assistant\n
+        # This marks the start of the assistant's response
+        prompt_end_pos = None
+
+        # Search for the pattern: <|im_start|> + assistant_tokens + newline
+        for pos in range(len(gen_ids) - len(assistant_tokens) - 2):
+            if gen_ids[pos] == im_start_id:
+                # Check if followed by assistant tokens
+                matches = True
+                for j, tok in enumerate(assistant_tokens):
+                    if gen_ids[pos + 1 + j] != tok:
+                        matches = False
+                        break
+                if matches and gen_ids[pos + 1 + len(assistant_tokens)] == newline_id:
+                    # Found it! The response starts after the newline
+                    prompt_end_pos = pos + 1 + len(assistant_tokens) + 1
+
+        if prompt_end_pos is None:
+            # Fallback: use the input length
+            prompt_end_pos = inputs["input_ids"].shape[1]
+
+        # Extract only the generated part
+        generated_part = torch.tensor(
+            gen_ids[prompt_end_pos:], device=generated_ids.device
+        )
+
+        # Debug specific problematic images
+        filename = pathlib.Path(batch[i]).name
+        if filename in debug_files:
+            print(f"\n=== DEBUG {filename} (item {i}) ===")
+            print(f"Found prompt_end_pos: {prompt_end_pos}")
+            print(f"Generated sequence length: {len(gen_ids)}")
+
+            # Show tokens around the boundary
+            boundary_start = max(0, prompt_end_pos - 10)
+            boundary_end = min(len(gen_ids), prompt_end_pos + 20)
+            boundary_ids = gen_ids[boundary_start:boundary_end]
+            boundary_tokens = processor.tokenizer.convert_ids_to_tokens(boundary_ids)
+            print(f"\nBoundary tokens [{boundary_start}:{boundary_end}]:")
+            for idx, (token_id, token) in enumerate(
+                zip(boundary_ids, boundary_tokens), start=boundary_start
+            ):
+                marker = " <-- NEW SPLIT HERE" if idx == prompt_end_pos else ""
+                print(f"  [{idx}] {token_id:6d} -> {token!r}{marker}")
+
+            # Decode the generated part with and without special tokens
+            print(f"\nGenerated part shape: {generated_part.shape}")
+            print(f"Generated part IDs (first 30): {generated_part[:30].tolist()}")
+
+            decoded_with_special = processor.decode(
+                generated_part,
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+            decoded_without_special = processor.decode(
+                generated_part,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+            print(f"\nDecoded WITH special tokens: {decoded_with_special!r}")
+            print(f"Decoded WITHOUT special tokens: {decoded_without_special!r}")
+
         caption = processor.decode(
             generated_part,
             skip_special_tokens=True,
             clean_up_tokenization_spaces=True,
         )
         captions.append(caption.strip())
-
-    timings["decoding"] = time.time() - start
-
-    if profile:
-        total_time = sum(timings.values())
-        print(f"\nBatch timing breakdown:")
-        for stage, duration in timings.items():
-            percentage = (duration / total_time) * 100
-            print(f"  {stage}: {duration:.3f}s ({percentage:.1f}%)")
-        print(f"  Total: {total_time:.3f}s")
 
     return captions
 
@@ -189,6 +233,11 @@ def main():
         min_pixels=448 * 448,
         max_pixels=672 * 672,
     )
+    # The tokenizer for Qwen2.5-VL doesn't have a pad token set by default.
+    # Setting it to the EOS token is a common practice and helps stabilize
+    # batch generation.
+    if processor.tokenizer.pad_token_id is None:
+        processor.tokenizer.pad_token_id = processor.tokenizer.eos_token_id
 
     # Compile model for faster inference (PyTorch 2.0+)
     if hasattr(torch, "compile"):
@@ -207,7 +256,7 @@ def main():
         else:
             batch_size = 16
     else:
-        batch_size = 16
+        batch_size = 6
     print(f"Using batch size: {batch_size}")
     num_workers = (
         6 if device.type == "cuda" else 0 if device.type == "mps" else 3
