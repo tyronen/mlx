@@ -24,12 +24,9 @@ echo "🔍 Detecting system package versions..."
 
 echo "# This file is auto-generated to constrain torch and numpy to the system versions." > training/constraints.txt
 
-# Define the path to the system's Python executable
-PY_SYSTEM="/usr/local/bin/python"
-
 # Execute Python commands to get the exact version strings
 function getversion() {
-  VERSION=$($PY_SYSTEM -c "import $1; print($1.__version__)")
+  VERSION=$(python -c "import $1; print($1.__version__)")
   # Check that the commands succeeded
   if [[ -z "$VERSION" ]]; then
     echo "❌ Error: Failed to detect $1 . Ensure it is installed in the system's Python."
@@ -69,7 +66,11 @@ export TMPDIR=/dev/shm
 #print("Flash-Attention OK on", torch.version.cuda,
 #      "with", torch.cuda.get_device_name(0))
 #PY
+cd /workspace/mlx
+
+pip install --upgrade pip
 
 pip install -r training/requirements.txt -c training/constraints.txt
 pip install -r api/requirements.txt -c training/constraints.txt
 pip install flash-attn --no-build-isolation
+wandb login $WANDB_KEY

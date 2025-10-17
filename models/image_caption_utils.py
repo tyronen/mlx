@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import csv
+import os
 
 BASE_MODEL_FILE = "data/base_model.pth"
 CUSTOM_MODEL_FILE = "data/custom_model.pth"
@@ -18,21 +19,56 @@ if TOKENIZER.bos_token is None:
     TOKENIZER.bos_token = TOKENIZER.eos_token
 
 
-def get_captions():
+def get_flickr(test_mode=False):
     imagepath = kagglehub.dataset_download("adityajn105/flickr30k")
+    image_dir = f"{imagepath}/Images"
+    filenames, rows = get_images_and_captions(
+        f"{imagepath}/captions.txt", "image", image_dir, test_mode
+    )
+    return image_dir, filenames, rows
 
-    # Load all caption rows as full dictionaries (keep every field)
-    with open(f"{imagepath}/captions.txt", newline="", encoding="utf-8") as f:
+
+def get_coco(test_mode=False):
+    image_dir = "data/coco"
+    filenames, rows = get_images_and_captions(
+        "data/coco/captions.csv", "file_name", image_dir, test_mode
+    )
+    return image_dir, filenames, rows
+
+
+def get_images_and_captions(captions_path, field_name, image_dir, test_mode=False):
+    with open(captions_path, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-        rows.sort(key=lambda r: r["image"])  # deterministic ordering by image filename
+        rows.sort(
+            key=lambda r: r[field_name]
+        )  # deterministic ordering by image filename
 
-    if DATA_FRACTION < 1:
+    if test_mode and DATA_FRACTION < 1:
         num_rows = max(1, int(DATA_FRACTION * len(rows)))
         rows = rows[:num_rows]
 
-    filenames = list({row["image"] for row in rows})
+    # Get unique filenames and check which ones exist
+    unique_filenames = list({row[field_name] for row in rows})
+    existing_filenames = set()
+    missing_count = 0
 
-    return imagepath, filenames, rows
+    for filename in unique_filenames:
+        filepath = os.path.join(image_dir, filename)
+        if os.path.exists(filepath):
+            existing_filenames.add(filename)
+        else:
+            missing_count += 1
+
+    if missing_count > 0:
+        print(f"Warning: {missing_count} image files not found in {image_dir}")
+
+    # Filter rows to only include existing images
+    filtered_rows = [row for row in rows if row[field_name] in existing_filenames]
+    filenames = [f for f in unique_filenames if f in existing_filenames]
+
+    print(f"Loaded {len(filenames)} images with {len(filtered_rows)} captions")
+
+    return filenames, filtered_rows
 
 
 def collate_fn(batch):

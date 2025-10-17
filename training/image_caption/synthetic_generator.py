@@ -1,3 +1,4 @@
+import logging
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from PIL import Image
 import torch
@@ -99,13 +100,13 @@ def generate_captions(device, model, processor, batch, profile=False):
     gen_time = time.time() - gen_start
 
     if profile:
-        print(f"  Generation breakdown:")
-        print(f"    Model forward: {gen_time:.3f}s")
-        print(
+        logging.info(f"  Generation breakdown:")
+        logging.info(f"    Model forward: {gen_time:.3f}s")
+        logging.info(
             f"    Input shapes: {[(k, v.shape if hasattr(v, 'shape') else type(v)) for k, v in inputs.items()]}"
         )
-        print(f"    Generated shape: {generated_ids.shape}")
-        print(
+        logging.info(f"    Generated shape: {generated_ids.shape}")
+        logging.info(
             f"    Generated length: {generated_ids.shape[1] - inputs['input_ids'].shape[1]} tokens"
         )
 
@@ -122,10 +123,10 @@ def generate_captions(device, model, processor, batch, profile=False):
     newline_id = newline_tokens[0] if newline_tokens else None
 
     if profile:
-        print(f"\n=== Token ID Debug ===")
-        print(f"im_start_id: {im_start_id}")
-        print(f"assistant_tokens: {assistant_tokens}")
-        print(f"newline_id: {newline_id}")
+        logging.info(f"\n=== Token ID Debug ===")
+        logging.info(f"im_start_id: {im_start_id}")
+        logging.info(f"assistant_tokens: {assistant_tokens}")
+        logging.info(f"newline_id: {newline_id}")
 
     # Debug: Files we're specifically interested in
     debug_files = {"000000002001.jpg", "000000005758.jpg", "000000015303.jpg"}
@@ -162,25 +163,27 @@ def generate_captions(device, model, processor, batch, profile=False):
         # Debug specific problematic images
         filename = pathlib.Path(batch[i]).name
         if filename in debug_files:
-            print(f"\n=== DEBUG {filename} (item {i}) ===")
-            print(f"Found prompt_end_pos: {prompt_end_pos}")
-            print(f"Generated sequence length: {len(gen_ids)}")
+            logging.info(f"\n=== DEBUG {filename} (item {i}) ===")
+            logging.info(f"Found prompt_end_pos: {prompt_end_pos}")
+            logging.info(f"Generated sequence length: {len(gen_ids)}")
 
             # Show tokens around the boundary
             boundary_start = max(0, prompt_end_pos - 10)
             boundary_end = min(len(gen_ids), prompt_end_pos + 20)
             boundary_ids = gen_ids[boundary_start:boundary_end]
             boundary_tokens = processor.tokenizer.convert_ids_to_tokens(boundary_ids)
-            print(f"\nBoundary tokens [{boundary_start}:{boundary_end}]:")
+            logging.info(f"\nBoundary tokens [{boundary_start}:{boundary_end}]:")
             for idx, (token_id, token) in enumerate(
                 zip(boundary_ids, boundary_tokens), start=boundary_start
             ):
                 marker = " <-- NEW SPLIT HERE" if idx == prompt_end_pos else ""
-                print(f"  [{idx}] {token_id:6d} -> {token!r}{marker}")
+                logging.info(f"  [{idx}] {token_id:6d} -> {token!r}{marker}")
 
             # Decode the generated part with and without special tokens
-            print(f"\nGenerated part shape: {generated_part.shape}")
-            print(f"Generated part IDs (first 30): {generated_part[:30].tolist()}")
+            logging.info(f"\nGenerated part shape: {generated_part.shape}")
+            logging.info(
+                f"Generated part IDs (first 30): {generated_part[:30].tolist()}"
+            )
 
             decoded_with_special = processor.decode(
                 generated_part,
@@ -192,8 +195,8 @@ def generate_captions(device, model, processor, batch, profile=False):
                 skip_special_tokens=True,
                 clean_up_tokenization_spaces=True,
             )
-            print(f"\nDecoded WITH special tokens: {decoded_with_special!r}")
-            print(f"Decoded WITHOUT special tokens: {decoded_without_special!r}")
+            logging.info(f"\nDecoded WITH special tokens: {decoded_with_special!r}")
+            logging.info(f"Decoded WITHOUT special tokens: {decoded_without_special!r}")
 
         caption = processor.decode(
             generated_part,
@@ -207,7 +210,27 @@ def generate_captions(device, model, processor, batch, profile=False):
 
 def main():
     utils.setup_logging()
+
+    # Diagnostic info to help debug GPU visibility issues
+    logging.info(f"PyTorch version: {torch.__version__}")
+    logging.info(f"CUDA available: {torch.cuda.is_available()}")
+    logging.info(f"CUDA device count: {torch.cuda.device_count()}")
+    if torch.cuda.is_available():
+        logging.info(f"CUDA version: {torch.version.cuda}")
+        for i in range(torch.cuda.device_count()):
+            logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            logging.info(f"  Capability: {torch.cuda.get_device_capability(i)}")
+    else:
+        logging.error("❌ CUDA is NOT available! Check:")
+        logging.error("  1. nvidia-smi works in the container")
+        logging.error(
+            "  2. Container started with --gpus all (Docker) or GPU enabled (RunPod)"
+        )
+        logging.error("  3. PyTorch was built with CUDA support")
+        logging.error("  4. NVIDIA Container Toolkit is installed on host")
+
     device = utils.get_device()
+    logging.info(f"Using device: {device}")
 
     # Enable optimizations
     torch.backends.cudnn.benchmark = True
@@ -257,7 +280,7 @@ def main():
             batch_size = 16
     else:
         batch_size = 6
-    print(f"Using batch size: {batch_size}")
+    logging.info(f"Using batch size: {batch_size}")
     num_workers = (
         6 if device.type == "cuda" else 0 if device.type == "mps" else 3
     )  # More workers
@@ -279,14 +302,11 @@ def main():
             # Profile first 3 batches to identify bottlenecks
             profile_this_batch = batch_idx < 3
             if profile_this_batch:
-                print(f"\n=== Profiling Batch {batch_idx} ===")
+                logging.info(f"\n=== Profiling Batch {batch_idx} ===")
                 if device.type == "cuda":
-                    print(
+                    logging.info(
                         f"GPU Memory before: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
                     )
-            # We're still just testing accuracy
-            if batch_idx > 0:
-                break
 
             captions = generate_captions(
                 device, model, processor, batch, profile=profile_this_batch
@@ -295,7 +315,7 @@ def main():
                 synthetic_dataset[image_path] = caption
 
             if profile_this_batch and device.type == "cuda":
-                print(
+                logging.info(
                     f"GPU Memory after: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
                 )
 
@@ -304,7 +324,7 @@ def main():
                 torch.cuda.empty_cache()
 
         except Exception as e:
-            print(f"Error processing batch {batch_idx}: {e}")
+            logging.info(f"Error processing batch {batch_idx}: {e}")
             continue
 
     output_csv = pathlib.Path("data/coco/metadata.csv")
@@ -314,7 +334,7 @@ def main():
         for img_path, caption in synthetic_dataset.items():
             writer.writerow([pathlib.Path(img_path).name, caption])
 
-    print(f"Wrote {len(synthetic_dataset)} captions to {output_csv}")
+    logging.info(f"Wrote {len(synthetic_dataset)} captions to {output_csv}")
 
 
 if __name__ == "__main__":

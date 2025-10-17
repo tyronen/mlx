@@ -15,14 +15,15 @@ from common import utils
 
 CLIP = "openai/clip-vit-base-patch32"
 VIT = "google/vit-base-patch16-224-in21k"
-IMAGES_PATH = "data/image_features.pt"
+FLICKR_FEATURES_PATH = "data/flickr_features.pt"
+COCO_FEATURES_PATH = "data/coco_features.pt"
 
 import numpy as np
 
 
 class Flickr30kDataset(Dataset):
     def __init__(self, split="train"):
-        _, unique_images, rows = image_caption_utils.get_captions()
+        _, unique_images, rows = image_caption_utils.get_flickr()
 
         # Split the images (not the individual caption rows) into train/val/test
         np.random.seed(42)  # reproducible splits
@@ -44,7 +45,7 @@ class Flickr30kDataset(Dataset):
         self.captions = [row for row in rows if row["image"] in split_images]
 
         self.tokenizer = image_caption_utils.TOKENIZER
-        self.image_features = torch.load(IMAGES_PATH, weights_only=False)
+        self.image_features = torch.load(FLICKR_FEATURES_PATH, weights_only=False)
 
     def __len__(self):
         return len(self.captions)
@@ -180,18 +181,21 @@ class ImageEncoder(nn.Module):
         super().__init__()
         self.device = utils.get_device()
         self.processor = AutoProcessor.from_pretrained(CLIP, use_fast=False)
-        self.model = AutoModel.from_pretrained(CLIP, use_safetensors=True).to(
-            self.device
-        )
+        full_model = AutoModel.from_pretrained(CLIP, use_safetensors=True)
+        # Use only the vision model, not the text model
+        self.model = full_model.vision_model.to(self.device)
 
         # Freeze the pre-trained weights
         for param in self.model.parameters():
             param.requires_grad = False
 
     def forward(self, images):
-        inputs = self.processor(images=images, return_tensors="pt").to(self.device)
+        inputs = self.processor(images=images, return_tensors="pt")
+        pixel_values = inputs.pixel_values.to(self.device)
         with torch.no_grad():
-            outputs = self.model(**inputs).last_hidden_state.mean(dim=1)
+            outputs = self.model(pixel_values=pixel_values).last_hidden_state.mean(
+                dim=1
+            )
         return outputs
 
 
