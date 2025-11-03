@@ -13,8 +13,8 @@ send common
 send models
 send training
 send ui
-send data/*.pth data/
-send data/*.pt data/
+#send data/*.pth data/
+#send data/*.pt data/
 send data/*.json data/
 send data/hn_predict data/
 send data/msmarco_search data/

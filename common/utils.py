@@ -31,11 +31,13 @@ def get_device():
         return torch.device("cpu")
 
 
-def amp_components(device, train=False):
+def amp_components(device, train=False, dtype=torch.bfloat16):
     if device.type == "cuda" and train:
-        return autocast(device_type="cuda"), GradScaler()
+        # BF16 on Ada/4090 is fast and stable; no scaler needed
+        return autocast(device_type="cuda", dtype=dtype), GradScaler(
+            enabled=(dtype == torch.float16)
+        )
     else:
-        # fall-back: no automatic casting, dummy scaler
         return nullcontext(), GradScaler(enabled=False)
 
 

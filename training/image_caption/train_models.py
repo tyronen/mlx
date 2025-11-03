@@ -21,7 +21,7 @@ hyperparameters = {
     "learning_rate": 5e-4,
     "epochs": 50,
     "dropout": 0.1,
-    "patience": 1,
+    "patience": 3,
     "label_smoothing": 0.1,
     "use_custom_decoder": args.custom,
     "dataset": args.dataset,
@@ -112,9 +112,17 @@ def run_training(config, **_):
     device = utils.get_device()
 
     model_file = (
-        image_caption_utils.CUSTOM_MODEL_FILE
-        if config["use_custom_decoder"]
-        else image_caption_utils.BASE_MODEL_FILE
+        image_caption_utils.CUSTOM_FLICKR_MODEL_FILE
+        if config["dataset"] == "flickr" and config["use_custom_decoder"]
+        else (
+            image_caption_utils.CUSTOM_COCO_MODEL_FILE
+            if config["dataset"] == "coco" and config["use_custom_decoder"]
+            else (
+                image_caption_utils.BASE_FLICKR_MODEL_FILE
+                if config["dataset"] == "flickr"
+                else image_caption_utils.BASE_COCO_MODEL_FILE
+            )
+        )
     )
 
     project = "custom-decoder" if config["use_custom_decoder"] else "base-decoder"

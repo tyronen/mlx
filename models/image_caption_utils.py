@@ -5,8 +5,10 @@ from transformers import AutoTokenizer
 import csv
 import os
 
-BASE_MODEL_FILE = "data/base_model.pth"
-CUSTOM_MODEL_FILE = "data/custom_model.pth"
+BASE_FLICKR_MODEL_FILE = "data/base_flickr_model.pth"
+BASE_COCO_MODEL_FILE = "data/base_coco_model.pth"
+CUSTOM_FLICKR_MODEL_FILE = "data/custom_flickr_model.pth"
+CUSTOM_COCO_MODEL_FILE = "data/custom_coco_model.pth"
 DATA_FRACTION = 0.004
 
 TOKENIZER = AutoTokenizer.from_pretrained(
@@ -88,6 +90,7 @@ class CustomDataLoader(DataLoader):
             drop_last=train,
             pin_memory=(device.type == "cuda"),
             num_workers=num_workers,
+            prefetch_factor=4,
             persistent_workers=(num_workers > 0),
             collate_fn=collate_fn,
         )

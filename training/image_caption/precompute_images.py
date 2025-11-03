@@ -50,7 +50,7 @@ def main(dataset_name, test_mode):
     features = {}
 
     for filenames, images in tqdm(dataloader):
-        outputs = model(images).cpu().numpy()
+        outputs = model(images).cpu()
         for fname, vec in zip(filenames, outputs):
             features[fname] = vec
 

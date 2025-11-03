@@ -16,11 +16,21 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 DEVICE = utils.get_device()
 
 
-def load_model(custom):
+def load_model(dataset, custom):
     filename = (
-        image_caption_utils.CUSTOM_MODEL_FILE
-        if custom
-        else image_caption_utils.BASE_MODEL_FILE
+        image_caption_utils.CUSTOM_FLICKR_MODEL_FILE
+        if dataset == "flickr" and custom
+        else (
+            image_caption_utils.CUSTOM_COCO_MODEL_FILE
+            if dataset == "coco" and custom
+            else (
+                (
+                    image_caption_utils.BASE_FLICKR_MODEL_FILE
+                    if dataset == "flickr"
+                    else image_caption_utils.BASE_COCO_MODEL_FILE
+                )
+            )
+        )
     )
     checkpoint = torch.load(filename, map_location=DEVICE)
     model = image_caption.CombinedTransformer(
@@ -41,10 +51,10 @@ def load_model(custom):
 def load_models():
     """Load the trained model"""
     vit_encoder = image_caption.ImageEncoder()
-    custom_model = load_model(custom=True)
-    base_model = load_model(custom=False)
+    flickr_model = load_model(dataset="flickr", custom=False)
+    coco_model = load_model(dataset="coco", custom=False)
     st.success("Model loaded successfully!")
-    return vit_encoder, custom_model, base_model
+    return vit_encoder, flickr_model, coco_model
 
 
 @st.cache_data
@@ -103,19 +113,19 @@ def main():
     st.title("🖼️ Image Captioning Server")
 
     # Load model
-    vit_encoder, custom_model, base_model = load_models()
+    vit_encoder, flickr_model, coco_model = load_models()
 
     # Initialize session state variables if they don't exist
     if "image_url" not in st.session_state:
         st.session_state.image_url = ""
-    if "custom_caption" not in st.session_state:
-        st.session_state.custom_caption = ""
+    if "flickr_caption" not in st.session_state:
+        st.session_state.flickr_caption = ""
 
     if st.button("Random image 🚀"):
         # Cache-buster so you don’t get the same photo twice
         seed = int(time.time() * 1000)  # or random.randint(0, 1e9)
         st.session_state.image_url = f"https://picsum.photos/seed/{seed}/640/480"
-        st.session_state.custom_caption = ""
+        st.session_state.flickr_caption = ""
         st.rerun()
 
     # Generation parameters
@@ -130,16 +140,16 @@ def main():
 
                 image_features = vit_encoder([image])
 
-                custom_caption = generate_caption(
-                    image_features, custom_model, max_length
+                flickr_caption = generate_caption(
+                    image_features, flickr_model, max_length
                 )
-                base_caption = generate_caption(image_features, base_model, max_length)
-                st.session_state.custom_caption = custom_caption
-                st.session_state.base_caption = base_caption
+                coco_caption = generate_caption(image_features, coco_model, max_length)
+                st.session_state.flickr_caption = flickr_caption
+                st.session_state.coco_caption = coco_caption
 
             st.image(image)
-            st.write(st.session_state.custom_caption)
-            st.write(st.session_state.base_caption)
+            st.write(st.session_state.flickr_caption)
+            st.write(st.session_state.coco_caption)
 
         else:
             st.error("Failed to load image from URL")

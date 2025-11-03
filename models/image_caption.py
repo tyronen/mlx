@@ -25,6 +25,7 @@ class ImageDataset(Dataset):
         raise NotImplementedError("Subclasses must implement this method")
 
     def __init__(self, file_field, caption_field, features_path, split="train"):
+        self.device = utils.get_device()
         self.file_field = file_field
         self.caption_field = caption_field
         self.features_path = features_path
@@ -58,7 +59,7 @@ class ImageDataset(Dataset):
     def __getitem__(self, idx):
         row = self.captions[idx]
         img_filename = row[self.file_field]
-        image = torch.tensor(self.image_features[img_filename])
+        image = self.image_features[img_filename]
         caption = row[self.caption_field]
         # Pre‑tokenize caption once (LongTensor [L])
         input_ids = self.tokenizer(
@@ -275,7 +276,6 @@ class CombinedTransformer(nn.Module):
             trust_remote_code=True,
             dtype=torch.bfloat16,
         )
-        base.gradient_checkpointing_enable()
         base.config.use_cache = False
 
         # Qwen‑3 stores its embeddings at base.model.embed_tokens
