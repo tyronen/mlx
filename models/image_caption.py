@@ -7,7 +7,6 @@ from transformers import (
     AutoModel,
     AutoProcessor,
     AutoModelForCausalLM,
-    BitsAndBytesConfig,
 )
 from peft import LoraConfig, get_peft_model
 from models import image_caption_utils
@@ -21,9 +20,15 @@ COCO_FEATURES_PATH = "data/coco_features.pt"
 import numpy as np
 
 
-class Flickr30kDataset(Dataset):
-    def __init__(self, split="train"):
-        _, unique_images, rows = image_caption_utils.get_flickr()
+class ImageDataset(Dataset):
+    def get_images(self):
+        raise NotImplementedError("Subclasses must implement this method")
+
+    def __init__(self, file_field, caption_field, features_path, split="train"):
+        self.file_field = file_field
+        self.caption_field = caption_field
+        self.features_path = features_path
+        _, unique_images, rows = self.get_images()
 
         # Split the images (not the individual caption rows) into train/val/test
         np.random.seed(42)  # reproducible splits
@@ -42,19 +47,19 @@ class Flickr30kDataset(Dataset):
             split_images = set(unique_images[val_end:test_end])
 
         # Keep only caption rows whose image belongs to the chosen split
-        self.captions = [row for row in rows if row["image"] in split_images]
+        self.captions = [row for row in rows if row[self.file_field] in split_images]
 
         self.tokenizer = image_caption_utils.TOKENIZER
-        self.image_features = torch.load(FLICKR_FEATURES_PATH, weights_only=False)
+        self.image_features = torch.load(self.features_path, weights_only=False)
 
     def __len__(self):
         return len(self.captions)
 
     def __getitem__(self, idx):
         row = self.captions[idx]
-        img_filename = row["image"]
+        img_filename = row[self.file_field]
         image = torch.tensor(self.image_features[img_filename])
-        caption = row["caption"]
+        caption = row[self.caption_field]
         # Pre‑tokenize caption once (LongTensor [L])
         input_ids = self.tokenizer(
             caption,
@@ -68,6 +73,32 @@ class Flickr30kDataset(Dataset):
         input_ids.extend([self.tokenizer.pad_token_id] * (32 - len(input_ids)))
         input_tensor = torch.tensor(input_ids, dtype=torch.long)
         return image, input_tensor
+
+
+class Flickr30kDataset(ImageDataset):
+    def __init__(self, split="train"):
+        super().__init__(
+            file_field="image",
+            caption_field="caption",
+            features_path=FLICKR_FEATURES_PATH,
+            split=split,
+        )
+
+    def get_images(self):
+        return image_caption_utils.get_flickr()
+
+
+class CocoDataset(ImageDataset):
+    def __init__(self, split="train"):
+        super().__init__(
+            file_field="file_name",
+            caption_field="text",
+            features_path=COCO_FEATURES_PATH,
+            split=split,
+        )
+
+    def get_images(self):
+        return image_caption_utils.get_coco()
 
 
 def attention(k_dim, q, k, v, mask_tensor):
@@ -236,16 +267,13 @@ class CombinedTransformer(nn.Module):
         super().__init__()
 
         self.tokenizer = image_caption_utils.TOKENIZER
-        bnb_config = BitsAndBytesConfig(
-            load_in_8bit=True,
-            llm_int8_threshold=6.0,  # typical defaults
-            llm_int8_has_fp16_weight=False,
-        )
+        # Load in bfloat16 for better numerical stability than fp16
+        # BF16 works great on RTX 5090 and uses same memory as FP16
+        # Don't use device_map="auto" as it triggers bitsandbytes in PEFT
         base = AutoModelForCausalLM.from_pretrained(
             "Qwen/Qwen3-0.6B-Base",
             trust_remote_code=True,
-            quantization_config=bnb_config,
-            device_map="auto",
+            dtype=torch.bfloat16,
         )
         base.gradient_checkpointing_enable()
         base.config.use_cache = False

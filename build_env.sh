@@ -14,6 +14,7 @@ if [[ -n "$SSH_CONNECTION" && -d /workspace ]]; then
   export HF_HOME="/dev/shm/.cache"
   export HF_DATASETS_CACHE="$HF_HOME/datasets_cache"
   export PIP_CACHE_DIR="$HF_HOME/pip_cache"
+  export KAGGLEHUB_CACHE="$HF_HOME/kagglehub"
   mkdir -p $HF_HOME
   mkdir -p $HF_DATASETS_CACHE
   mkdir -p $PIP_CACHE_DIR
@@ -72,5 +73,7 @@ pip install --upgrade pip
 
 pip install -r training/requirements.txt -c training/constraints.txt
 pip install -r api/requirements.txt -c training/constraints.txt
-pip install flash-attn --no-build-isolation
+
+# Only needed for synthetic-generation (image-captioning), api server (audio) and SFT (fine-tuning)
+# pip install flash-attn --no-build-isolation
 wandb login $WANDB_KEY

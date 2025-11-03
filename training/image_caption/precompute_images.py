@@ -4,7 +4,7 @@ from tqdm import tqdm
 from models import image_caption, image_caption_utils
 import torch
 from torch.utils.data import Dataset, DataLoader
-
+from common import arguments
 from PIL import Image
 
 
@@ -66,20 +66,8 @@ def main(dataset_name, test_mode):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
+    parser = arguments.get_parser(
         description="Precompute image embeddings for image captioning"
     )
-    parser.add_argument(
-        "--dataset",
-        type=str,
-        default="coco",
-        choices=["coco", "flickr"],
-        help="Dataset to use: 'coco' or 'flickr' (default: coco)",
-    )
-    parser.add_argument(
-        "--test",
-        action="store_true",
-        help="Use test mode with DATA_FRACTION subset of images",
-    )
     args = parser.parse_args()
-    main(args.dataset, args.test)
+    main(args.dataset, args.check)

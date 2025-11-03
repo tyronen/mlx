@@ -2,18 +2,12 @@ import logging
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-import argparse
 import wandb
 from tqdm import tqdm
-from common import utils
+from common import arguments, utils
 from models import image_caption, image_caption_utils
-import bitsandbytes.optim as bnb_optim
 
-parser = argparse.ArgumentParser(description="Train simple model")
-parser.add_argument("--entity", help="W and B entity", default="tyronenicholas")
-parser.add_argument("--base", help="Whether to use base decoder", action="store_true")
-parser.add_argument("--sweep", help="Run a sweep", action="store_true")
-parser.add_argument("--check", help="Make sure it works", action="store_true")
+parser = arguments.get_parser(description="Train simple model")
 args = parser.parse_args()
 
 
@@ -29,7 +23,8 @@ hyperparameters = {
     "dropout": 0.1,
     "patience": 1,
     "label_smoothing": 0.1,
-    "use_custom_decoder": not args.base,
+    "use_custom_decoder": args.custom,
+    "dataset": args.dataset,
 }
 
 sweep_config = {
@@ -51,7 +46,8 @@ sweep_config = {
         "dropout": {"values": [0.0, 0.1, 0.2]},
         "patience": {"values": [3, 5, 10]},
         "label_smoothing": {"values": [0.0, 0.05, 0.1]},
-        "use_custom_decoder": {"values": [not args.base]},
+        "use_custom_decoder": {"values": [args.custom]},
+        "dataset": {"values": [args.dataset]},
     },
 }
 
@@ -77,7 +73,7 @@ def validate_model(model, validation_dataloader, epoch, device, config):
             num_batches += 1
 
     model.train()  # Set back to training mode
-    logging.info(f"validation: total loss {total_loss} batches {num_batches}")
+    logging.info(f"validation: total loss {total_loss:.3f} batches {num_batches}")
     return total_loss / num_batches
 
 
@@ -132,9 +128,19 @@ def run_training(config, **_):
     if config is None:
         config = dict(wandb.config)
 
-    train_dataset = image_caption.Flickr30kDataset(split="train")
-    validation_dataset = image_caption.Flickr30kDataset(split="val")
-    test_dataset = image_caption.Flickr30kDataset(split="test")
+    if config["dataset"] == "flickr":
+        train_dataset = image_caption.Flickr30kDataset(split="train")
+        validation_dataset = image_caption.Flickr30kDataset(split="val")
+        test_dataset = image_caption.Flickr30kDataset(split="test")
+    elif config["dataset"] == "coco":
+        train_dataset = image_caption.CocoDataset(split="train")
+        validation_dataset = image_caption.CocoDataset(split="val")
+        test_dataset = image_caption.CocoDataset(split="test")
+    else:
+        raise ValueError(
+            f"Unknown dataset: {config['dataset']}. Choose 'coco' or 'flickr'."
+        )
+
     logging.info(
         f"Dataset sizes: training {len(train_dataset)} validation: {len(validation_dataset)} test: {len(test_dataset)}"
     )
@@ -162,13 +168,8 @@ def run_training(config, **_):
     ).to(device)
     wandb.watch(model, log="all", log_freq=100)
     wandb.define_metric("val_loss", summary="min")
-    params = [
-        {
-            "params": model.parameters(),
-            "lr": config["learning_rate"],
-        },
-    ]
-    optimizer = bnb_optim.Adam8bit(
+
+    optimizer = optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=config["learning_rate"],
     )
@@ -225,7 +226,9 @@ def run_training(config, **_):
             },
         )
         last_epoch += 1
-        logging.info(f"train {avg_train_loss} avg {avg_val_loss} best {best_val_loss}")
+        logging.info(
+            f"train loss {avg_train_loss:.3f} avg val loss {avg_val_loss:.3f} best val loss {best_val_loss:.3f}"
+        )
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             patience_counter = 0
@@ -240,7 +243,7 @@ def run_training(config, **_):
                 },
                 model_file,
             )
-            logging.info("Saved in epoch {last_epoch}")
+            logging.info(f"Saved in epoch {last_epoch}")
         else:
             patience_counter += 1
             if patience_counter >= config["patience"]:
@@ -263,7 +266,7 @@ def run_training(config, **_):
         artifact = wandb.Artifact(name=name, type="model")
         artifact.add_file(model_file)
         run.log_artifact(artifact)
-    run.finish(0, timeout=0)
+    run.finish(0)
 
 
 if __name__ == "__main__":
