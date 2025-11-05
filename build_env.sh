@@ -80,3 +80,5 @@ wandb login $WANDB_KEY
 
 # May be needed on RTX 5090
 # pip install --upgrade --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu129
+export TORCHINDUCTOR_CACHE_DIR=/tmp/.torchinductor
+export TRITON_CACHE_DIR=/tmp/.triton

@@ -3,6 +3,8 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 import wandb
+import torch._dynamo
+import torch._inductor.config
 from tqdm import tqdm
 from common import arguments, utils
 from models import image_caption, image_caption_utils
@@ -12,8 +14,8 @@ args = parser.parse_args()
 
 
 hyperparameters = {
-    "accumulation_steps": 32,
-    "batch_size": 128,
+    "accumulation_steps": 16,
+    "batch_size": 256,
     "model_dim": 512,
     "ffn_dim": 1536,
     "num_heads": 8,
@@ -31,8 +33,8 @@ sweep_config = {
     "method": "random",  # can be 'grid', 'random', or 'bayes'
     "metric": {"name": "val_loss", "goal": "minimize"},
     "parameters": {
-        "accumulation_steps": {"values": [16, 32]},
-        "batch_size": {"values": [96, 128, 160]},
+        "accumulation_steps": {"values": [8, 16]},
+        "batch_size": {"values": [192, 256, 320]},
         "model_dim": {"values": [384, 512]},
         "ffn_dim": {"values": [1536, 2048]},
         "num_heads": {"values": [8]},
@@ -52,7 +54,7 @@ sweep_config = {
 }
 
 
-def validate_model(model, validation_dataloader, epoch, device, config):
+def validate_model(model, validation_dataloader, epoch, device, config, pad_token_id):
     model.eval()
 
     total_loss = 0.0
@@ -66,7 +68,7 @@ def validate_model(model, validation_dataloader, epoch, device, config):
             }
 
             # Forward pass (shared with training)
-            loss = loss_fn(batch, model, config["label_smoothing"])
+            loss = loss_fn(batch, model, config["label_smoothing"], pad_token_id)
 
             # loss already computed by loss_fn
             total_loss += loss.item()
@@ -77,7 +79,7 @@ def validate_model(model, validation_dataloader, epoch, device, config):
     return total_loss / num_batches
 
 
-def loss_fn(batch, model, label_smoothing):
+def loss_fn(batch, model, label_smoothing, pad_token_id):
     input_ids = batch["input_ids"]
     logits = model(batch["images"], input_ids)
 
@@ -92,7 +94,7 @@ def loss_fn(batch, model, label_smoothing):
     loss = F.cross_entropy(
         shift_logits.view(-1, vocab_size),
         shift_labels.view(-1),
-        ignore_index=model.tokenizer.pad_token_id,
+        ignore_index=pad_token_id,
         label_smoothing=label_smoothing,
     )
     return loss
@@ -162,8 +164,9 @@ def run_training(config, **_):
         test_dataset, device, batch_size=config["batch_size"]
     )
 
-    # Total optimizer steps = batches per epoch × epochs
-    total_steps = len(training_dataloader) * config["epochs"]
+    # Total optimizer steps = (batches per epoch / accumulation steps) × epochs
+    steps_per_epoch = len(training_dataloader) // config["accumulation_steps"]
+    total_steps = steps_per_epoch * config["epochs"]
 
     maybe_autocast, scaler = utils.amp_components(device, True)
     model = image_caption.CombinedTransformer(
@@ -174,8 +177,29 @@ def run_training(config, **_):
         dropout=config["dropout"],
         use_custom_decoder=config["use_custom_decoder"],
     ).to(device)
-    wandb.watch(model, log="all", log_freq=100)
+
     wandb.define_metric("val_loss", summary="min")
+
+    # Store pad_token_id before compilation
+    pad_token_id = model.tokenizer.pad_token_id
+
+    # Enable TF32 for better performance on RTX 5090
+    torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore
+    torch.backends.cudnn.allow_tf32 = True  # type: ignore
+
+    # Compile model with CUDA Graphs disabled (CUDA Graphs conflicts with gradient accumulation)
+    # Still get kernel fusion and graph optimization from torch.compile()
+
+    torch._dynamo.config.suppress_errors = True
+    # Multiple ways to disable CUDA Graphs
+    torch._inductor.config.triton.cudagraphs = False  # type: ignore
+    torch._inductor.config.triton.cudagraph_trees = False  # type: ignore
+
+    # Use default mode instead of reduce-overhead to avoid CUDA Graphs entirely
+    model = torch.compile(model)
+    logging.info(
+        "Model compiled with torch.compile() (CUDA Graphs disabled for gradient accumulation)"
+    )
 
     optimizer = optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
@@ -188,6 +212,7 @@ def run_training(config, **_):
     patience_counter = 0
     last_epoch = 0
     grad_norm = 0
+    optimizer.zero_grad(set_to_none=True)
     for epoch in range(config["epochs"]):
 
         total_train_loss = 0.0
@@ -197,7 +222,7 @@ def run_training(config, **_):
                 k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()
             }
             with maybe_autocast:
-                loss = loss_fn(batch, model, config["label_smoothing"])
+                loss = loss_fn(batch, model, config["label_smoothing"], pad_token_id)
                 loss = loss / config["accumulation_steps"]
 
             scaler.scale(loss).backward()
@@ -208,11 +233,11 @@ def run_training(config, **_):
                 )
                 scaler.step(optimizer)
                 scaler.update()
-                optimizer.zero_grad()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
                 total_train_loss += loss.item()
                 num_train_batches += 1
                 grad_norm = total_norm.item()
-                del loss, batch
 
         logging.info(f"Epoch {epoch + 1}/{config['epochs']}")
         avg_train_loss = (
@@ -221,9 +246,8 @@ def run_training(config, **_):
             else total_train_loss
         )
         avg_val_loss = validate_model(
-            model, validation_dataloader, epoch, device, config
+            model, validation_dataloader, epoch, device, config, pad_token_id
         )
-        scheduler.step()
 
         run.log(
             {
@@ -240,9 +264,15 @@ def run_training(config, **_):
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             patience_counter = 0
+            # Save underlying model state dict (not compiled wrapper)
+            state_dict = (
+                model._orig_mod.state_dict()
+                if hasattr(model, "_orig_mod")
+                else model.state_dict()
+            )
             torch.save(
                 {
-                    "state_dict": model.state_dict(),
+                    "state_dict": state_dict,
                     "model_dim": config["model_dim"],
                     "ffn_dim": config["ffn_dim"],
                     "num_heads": config["num_heads"],
@@ -260,8 +290,14 @@ def run_training(config, **_):
         if args.check:
             break
     checkpoint = torch.load(model_file)
-    model.load_state_dict(checkpoint["state_dict"])
-    test_loss = validate_model(model, test_dataloader, last_epoch + 1, device, config)
+    # Load state dict into the underlying (non-compiled) model
+    if hasattr(model, "_orig_mod"):
+        model._orig_mod.load_state_dict(checkpoint["state_dict"])
+    else:
+        model.load_state_dict(checkpoint["state_dict"])
+    test_loss = validate_model(
+        model, test_dataloader, last_epoch + 1, device, config, pad_token_id
+    )
     run.log(
         {"test_loss": test_loss},
     )

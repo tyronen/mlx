@@ -50,11 +50,11 @@ def load_model(dataset, custom):
 @st.cache_resource
 def load_models():
     """Load the trained model"""
-    vit_encoder = image_caption.ImageEncoder()
+    encoder = image_caption.ImageEncoder()
     flickr_model = load_model(dataset="flickr", custom=False)
     coco_model = load_model(dataset="coco", custom=False)
     st.success("Model loaded successfully!")
-    return vit_encoder, flickr_model, coco_model
+    return encoder, flickr_model, coco_model
 
 
 @st.cache_data
@@ -106,14 +106,10 @@ def generate_caption(image_features, model, max_length=50):
 
 
 def main():
-    st.set_page_config(
-        page_title="Image Captioning Server", page_icon="🖼️", layout="wide"
-    )
-
     st.title("🖼️ Image Captioning Server")
 
     # Load model
-    vit_encoder, flickr_model, coco_model = load_models()
+    encoder, flickr_model, coco_model = load_models()
 
     # Initialize session state variables if they don't exist
     if "image_url" not in st.session_state:
@@ -126,6 +122,7 @@ def main():
         seed = int(time.time() * 1000)  # or random.randint(0, 1e9)
         st.session_state.image_url = f"https://picsum.photos/seed/{seed}/640/480"
         st.session_state.flickr_caption = ""
+        st.session_state.coco_caption = ""
         st.rerun()
 
     # Generation parameters
@@ -136,9 +133,11 @@ def main():
         image = load_image_from_url(st.session_state.image_url)
 
         if image is not None:
+            st.write(f"Image URL: {st.session_state.image_url}")
+            st.image(image)
             with st.spinner("Generating captions..."), torch.no_grad():
 
-                image_features = vit_encoder([image])
+                image_features = encoder([image])
 
                 flickr_caption = generate_caption(
                     image_features, flickr_model, max_length
@@ -147,9 +146,8 @@ def main():
                 st.session_state.flickr_caption = flickr_caption
                 st.session_state.coco_caption = coco_caption
 
-            st.image(image)
-            st.write(st.session_state.flickr_caption)
-            st.write(st.session_state.coco_caption)
+            st.markdown(f"**Flickr caption:** {st.session_state.flickr_caption}")
+            st.markdown(f"**COCO caption:** {st.session_state.coco_caption}")
 
         else:
             st.error("Failed to load image from URL")

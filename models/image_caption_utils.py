@@ -82,7 +82,8 @@ def collate_fn(batch):
 
 class CustomDataLoader(DataLoader):
     def __init__(self, dataset, device, batch_size, train=False):
-        num_workers = 8 if device.type == "cuda" else 0 if device.type == "mps" else 4
+        # Reduced workers to avoid "Too many open files" with large batch sizes
+        num_workers = 4 if device.type == "cuda" else 0 if device.type == "mps" else 2
         super().__init__(
             dataset,
             batch_size=batch_size,
@@ -90,7 +91,6 @@ class CustomDataLoader(DataLoader):
             drop_last=train,
             pin_memory=(device.type == "cuda"),
             num_workers=num_workers,
-            prefetch_factor=4,
-            persistent_workers=(num_workers > 0),
+            prefetch_factor=8,  # Increased prefetch for better GPU saturation
             collate_fn=collate_fn,
         )

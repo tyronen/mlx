@@ -3,7 +3,7 @@
 REMOTE="mlx"
 
 function send() {
-    rsync -vrt "$1" "$REMOTE:/workspace/mlx/$2"
+    rsync -vrt --exclude='__pycache__' "$1" "$REMOTE:/workspace/mlx/$2"
 }
 
 send *.sh
