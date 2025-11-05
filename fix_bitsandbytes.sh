@@ -3,6 +3,8 @@
 
 set -e
 
+cd /workspace/
+
 echo "Installing build dependencies..."
 apt-get install -y build-essential cmake
 

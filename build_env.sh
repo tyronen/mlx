@@ -77,3 +77,6 @@ pip install -r api/requirements.txt -c training/constraints.txt
 # Only needed for synthetic-generation (image-captioning), api server (audio) and SFT (fine-tuning)
 # pip install flash-attn --no-build-isolation
 wandb login $WANDB_KEY
+
+# May be needed on RTX 5090
+# pip install --upgrade --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu129

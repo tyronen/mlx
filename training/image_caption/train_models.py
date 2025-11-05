@@ -12,8 +12,8 @@ args = parser.parse_args()
 
 
 hyperparameters = {
-    "accumulation_steps": 128,
-    "batch_size": 32,
+    "accumulation_steps": 32,
+    "batch_size": 128,
     "model_dim": 512,
     "ffn_dim": 1536,
     "num_heads": 8,
@@ -31,8 +31,8 @@ sweep_config = {
     "method": "random",  # can be 'grid', 'random', or 'bayes'
     "metric": {"name": "val_loss", "goal": "minimize"},
     "parameters": {
-        "accumulation_steps": {"values": [128, 192]},
-        "batch_size": {"values": [16, 32]},
+        "accumulation_steps": {"values": [16, 32]},
+        "batch_size": {"values": [96, 128, 160]},
         "model_dim": {"values": [384, 512]},
         "ffn_dim": {"values": [1536, 2048]},
         "num_heads": {"values": [8]},
