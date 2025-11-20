@@ -101,8 +101,16 @@ rsync <GPU>L:/path/data/complex_mnist.pth data/
 
 ## Week 4 - Image captioner
 
+On some hardwares, CUDA registers as unavailable. You can run `check_gpu.py` to sometimes correct this.
+
 ```
+# Generate synthetic dataset from COCO
+python -m training.image_caption.synthetic_generator
+python -m training.image_caption.fix_metadata
+# Precompute image features
 python -m training.image_caption.precompute_images
+python -m training.image_caption.precompute_images --dataset=flickr
+python -m training.image_caption.train_models --dataset=flickr
 python -m training.image_caption.train_models
 ```
 

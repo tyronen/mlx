@@ -7,6 +7,8 @@ echo "🚀 Initializing RunPod environment..."
 apt-get update
 apt-get install -y vim rsync nvtop htop tmux curl ca-certificates git-lfs lsof nano less cargo rustc swig ninja-build build-essential pciutils wget
 
+rsync -vrt /workspace/ramdiskbackup/ /dev/shm/ || true
+
 echo "========================================="
 echo "🔍 GPU Visibility Check"
 echo "========================================="
@@ -104,9 +106,5 @@ fi
 
 echo ""
 echo "========================================="
-
-cd /workspace/ramdiskbackup/shm || true
-rsync -vrt .cache /dev/shm || true
-rsync -vrt * /dev/shm || true
 
 echo "✅ init_pod.sh completed"

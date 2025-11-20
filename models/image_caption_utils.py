@@ -15,10 +15,13 @@ TOKENIZER = AutoTokenizer.from_pretrained(
     "Qwen/Qwen3-0.6B-Base", trust_remote_code=True
 )
 TOKENIZER.add_special_tokens({"additional_special_tokens": ["<IMG>"]})
-TOKENIZER.pad_token = TOKENIZER.eos_token
-# Set BOS token to EOS token if it doesn't exist
+added_specials = {}
 if TOKENIZER.bos_token is None:
-    TOKENIZER.bos_token = TOKENIZER.eos_token
+    added_specials["bos_token"] = "<|im_start|>"
+if TOKENIZER.pad_token is None:
+    added_specials["pad_token"] = "<|im_pad|>"
+if added_specials:
+    TOKENIZER.add_special_tokens(added_specials)
 
 
 def get_flickr(test_mode=False):

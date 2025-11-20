@@ -279,6 +279,8 @@ class CombinedTransformer(nn.Module):
         base.config.use_cache = False
 
         # Qwen‑3 stores its embeddings at base.model.embed_tokens
+        base.resize_token_embeddings(len(self.tokenizer))
+        base.config.pad_token_id = self.tokenizer.pad_token_id
         self.token_embedding = base.model.embed_tokens
         self.token_embedding.requires_grad_(False)
         self.use_custom_decoder = use_custom_decoder
@@ -308,7 +310,7 @@ class CombinedTransformer(nn.Module):
                 if "lora_" in name:
                     p.requires_grad = True
             self.token_proj = nn.Identity()
-            img_proj_out = self.decoder.config.hidden_size
+            img_proj_out = base.config.hidden_size
         self.image_projection = nn.Linear(768, img_proj_out)
 
     def embed_input_ids(self, input_ids):
