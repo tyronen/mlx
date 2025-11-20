@@ -82,7 +82,7 @@ def main():
     logging.info(f"  Total captions: {total_count}")
     logging.info(f"  Fixed captions: {fixed_count}")
     logging.info(f"  Unchanged captions: {total_count - fixed_count}")
-    logging.info(f"\New data saved to: {output_path}")
+    logging.info(f"\nNew data saved to: {output_path}")
 
 
 if __name__ == "__main__":
