@@ -1,7 +1,9 @@
 import logging
+import os
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from PIL import Image
 import torch
+from torch import version as torch_version
 import pathlib
 import csv
 import time
@@ -25,15 +27,22 @@ class CocoDataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        return self.image_paths[idx]
+        image_path = self.image_paths[idx]
+        with Image.open(image_path) as img:
+            image = img.convert("RGB")
+        return image, image_path
 
 
-def generate_captions(device, model, processor, batch, profile=False):
+def coco_collate(batch):
+    images, paths = zip(*batch)
+    return list(images), list(paths)
 
-    # Load and process the images
-    images = []
-    for image_path in batch:
-        images.append(Image.open(image_path).convert("RGB"))
+
+def generate_captions(
+    device, model, processor, batch_images, batch_paths, profile=False
+):
+
+    images = batch_images
 
     # Create per-image conversations (batched) for chat template
     conversations = [
@@ -69,12 +78,13 @@ def generate_captions(device, model, processor, batch, profile=False):
     inputs = inputs.to(device)
 
     generation_kwargs = {
-        "max_new_tokens": 128,
+        "max_new_tokens": 90,
         "do_sample": False,
-        "pad_token_id": processor.tokenizer.eos_token_id,
+        "pad_token_id": processor.tokenizer.pad_token_id,
         "use_cache": True,
+        # Removed static cache - it triggers Triton compilation issues
+        # "cache_implementation": "static",
         "num_beams": 1,
-        "early_stopping": False,
     }
     # With pad_token configured correctly, we expect the model to use the proper
     # end-of-turn token for chat/instruct-tuned models.
@@ -85,7 +95,10 @@ def generate_captions(device, model, processor, batch, profile=False):
             and im_end_id != processor.tokenizer.unk_token_id
             and im_end_id is not None
         ):
-            generation_kwargs["eos_token_id"] = im_end_id
+            generation_kwargs["eos_token_id"] = [
+                im_end_id,
+                processor.tokenizer.eos_token_id,
+            ]
     except Exception:
         pass
 
@@ -161,7 +174,7 @@ def generate_captions(device, model, processor, batch, profile=False):
         )
 
         # Debug specific problematic images
-        filename = pathlib.Path(batch[i]).name
+        filename = pathlib.Path(batch_paths[i]).name
         if filename in debug_files:
             logging.info(f"\n=== DEBUG {filename} (item {i}) ===")
             logging.info(f"Found prompt_end_pos: {prompt_end_pos}")
@@ -216,7 +229,8 @@ def main():
     logging.info(f"CUDA available: {torch.cuda.is_available()}")
     logging.info(f"CUDA device count: {torch.cuda.device_count()}")
     if torch.cuda.is_available():
-        logging.info(f"CUDA version: {torch.version.cuda}")
+        cuda_version = getattr(torch_version, "cuda", "unknown")
+        logging.info(f"CUDA version: {cuda_version}")
         for i in range(torch.cuda.device_count()):
             logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
             logging.info(f"  Capability: {torch.cuda.get_device_capability(i)}")
@@ -240,7 +254,7 @@ def main():
     # Load the model and processor with optimizations
     model = AutoModelForImageTextToText.from_pretrained(
         LLM,
-        dtype=torch.float16,
+        dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation=(
             "flash_attention_2" if torch.cuda.is_available() else "eager"
@@ -249,22 +263,31 @@ def main():
         use_safetensors=True,  # Use safetensors for faster loading
     )
     # This is the key: control vision tokens by setting pixel limits in the processor
-    # This avoids creating >1400 patches per image, which was the bottleneck
-    # These settings correspond to roughly 448x448 to 672x672 resolution.
+    # Lower resolution = fewer vision tokens = faster generation
+    # These settings correspond to roughly 256x256 to 448x448 resolution.
     processor = AutoProcessor.from_pretrained(
         LLM,
-        min_pixels=448 * 448,
-        max_pixels=672 * 672,
+        min_pixels=256 * 256,
+        max_pixels=336 * 336,
     )
     # The tokenizer for Qwen2.5-VL doesn't have a pad token set by default.
     # Setting it to the EOS token is a common practice and helps stabilize
     # batch generation.
     if processor.tokenizer.pad_token_id is None:
-        processor.tokenizer.pad_token_id = processor.tokenizer.eos_token_id
+        processor.tokenizer.pad_token_id = processor.tokenizer.convert_tokens_to_ids(
+            "<|im_pad|>"
+        )
+    model.config.pad_token_id = processor.tokenizer.pad_token_id
+    # For decoder-only models, padding should be on the left
+    processor.tokenizer.padding_side = "left"
 
-    # Compile model for faster inference (PyTorch 2.0+)
-    if hasattr(torch, "compile"):
-        model = torch.compile(model, mode="reduce-overhead")
+    # Debug: Log token IDs to verify configuration
+    logging.info(
+        f"Pad token: {processor.tokenizer.pad_token} (ID: {processor.tokenizer.pad_token_id})"
+    )
+    logging.info(
+        f"EOS token: {processor.tokenizer.eos_token} (ID: {processor.tokenizer.eos_token_id})"
+    )
 
     coco_dataset = CocoDataset()
 
@@ -272,8 +295,8 @@ def main():
     # Try to maximize GPU utilization while staying within memory limits
     if device.type == "cuda":
         gpu_memory = torch.cuda.get_device_properties(0).total_memory
-        if gpu_memory > 20e9:  # > 20GB (RTX 5090)
-            batch_size = 64  # Larger than 32, but not too large
+        if gpu_memory > 20e9:  # > 20GB (RTX 5090 has 32GB)
+            batch_size = 448  # Maximize VRAM usage for fastest throughput
         elif gpu_memory > 10e9:  # > 10GB
             batch_size = 32
         else:
@@ -281,9 +304,16 @@ def main():
     else:
         batch_size = 6
     logging.info(f"Using batch size: {batch_size}")
-    num_workers = (
-        6 if device.type == "cuda" else 0 if device.type == "mps" else 3
-    )  # More workers
+
+    if device.type == "cuda":
+        cpu_count = os.cpu_count() or 1
+        num_workers = max(2, min(16, cpu_count))
+    elif device.type == "mps":
+        num_workers = 0
+    else:
+        num_workers = 3
+    prefetch_factor = 4 if (device.type == "cuda" and num_workers > 0) else 2
+
     dataloader = DataLoader(
         coco_dataset,
         batch_size=batch_size,
@@ -292,12 +322,15 @@ def main():
         pin_memory=(device.type == "cuda"),
         num_workers=num_workers,
         persistent_workers=(num_workers > 0),
-        prefetch_factor=(2 if device.type == "cuda" else None),  # Prefetch more batches
+        prefetch_factor=prefetch_factor,
+        collate_fn=coco_collate,
     )
 
     synthetic_dataset = dict()
 
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Generating captions")):
+    for batch_idx, (batch_images, batch_paths) in enumerate(
+        tqdm(dataloader, desc="Generating captions")
+    ):
         try:
             # Profile first 3 batches to identify bottlenecks
             profile_this_batch = batch_idx < 3
@@ -309,9 +342,14 @@ def main():
                     )
 
             captions = generate_captions(
-                device, model, processor, batch, profile=profile_this_batch
+                device,
+                model,
+                processor,
+                batch_images,
+                batch_paths,
+                profile=profile_this_batch,
             )
-            for image_path, caption in zip(batch, captions):
+            for image_path, caption in zip(batch_paths, captions):
                 synthetic_dataset[image_path] = caption
 
             if profile_this_batch and device.type == "cuda":
@@ -319,8 +357,8 @@ def main():
                     f"GPU Memory after: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
                 )
 
-            # Clear cache every 10 batches to prevent memory buildup
-            if batch_idx % 10 == 0:
+            # Clear cache less frequently with large batches
+            if device.type == "cuda" and batch_idx % 50 == 0 and batch_idx > 0:
                 torch.cuda.empty_cache()
 
         except Exception as e:
