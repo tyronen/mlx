@@ -10,6 +10,17 @@ from common import arguments, utils
 from models import image_caption, image_caption_utils
 
 parser = arguments.get_parser(description="Train simple model")
+parser.add_argument(
+    "--official_captions",
+    action="store_true",
+    help="Use official COCO captions instead of synthetic ones",
+)
+parser.add_argument(
+    "--finetune_from",
+    type=str,
+    default=None,
+    help="Path to a pretrained model checkpoint to fine-tune from",
+)
 args = parser.parse_args()
 
 
@@ -27,6 +38,8 @@ hyperparameters = {
     "label_smoothing": 0.1,
     "use_custom_decoder": args.custom,
     "dataset": args.dataset,
+    "use_official_captions": args.official_captions,
+    "finetune_from": args.finetune_from,
 }
 
 sweep_config = {
@@ -50,6 +63,8 @@ sweep_config = {
         "label_smoothing": {"values": [0.0, 0.05, 0.1]},
         "use_custom_decoder": {"values": [args.custom]},
         "dataset": {"values": [args.dataset]},
+        "use_official_captions": {"values": [args.official_captions]},
+        "finetune_from": {"values": [args.finetune_from]},
     },
 }
 
@@ -122,7 +137,11 @@ def run_training(config, **_):
             else (
                 image_caption_utils.BASE_FLICKR_MODEL_FILE
                 if config["dataset"] == "flickr"
-                else image_caption_utils.BASE_COCO_MODEL_FILE
+                else (
+                    image_caption_utils.OFFICIAL_COCO_MODEL_FILE
+                    if config.get("use_official_captions")
+                    else image_caption_utils.BASE_COCO_MODEL_FILE
+                )
             )
         )
     )
@@ -143,9 +162,18 @@ def run_training(config, **_):
         validation_dataset = image_caption.Flickr30kDataset(split="val")
         test_dataset = image_caption.Flickr30kDataset(split="test")
     elif config["dataset"] == "coco":
-        train_dataset = image_caption.CocoDataset(split="train")
-        validation_dataset = image_caption.CocoDataset(split="val")
-        test_dataset = image_caption.CocoDataset(split="test")
+        train_dataset = image_caption.CocoDataset(
+            split="train",
+            use_official_captions=config.get("use_official_captions", False),
+        )
+        validation_dataset = image_caption.CocoDataset(
+            split="val",
+            use_official_captions=config.get("use_official_captions", False),
+        )
+        test_dataset = image_caption.CocoDataset(
+            split="test",
+            use_official_captions=config.get("use_official_captions", False),
+        )
     else:
         raise ValueError(
             f"Unknown dataset: {config['dataset']}. Choose 'coco' or 'flickr'."
@@ -177,6 +205,18 @@ def run_training(config, **_):
         dropout=config["dropout"],
         use_custom_decoder=config["use_custom_decoder"],
     ).to(device)
+
+    # If fine-tuning from a checkpoint, load it now
+    if config.get("finetune_from"):
+        logging.info(f"Loading pretrained model from {config['finetune_from']}...")
+        checkpoint = torch.load(config["finetune_from"], map_location=device)
+        # Load state dict but allow for missing keys if architecture slightly differs (e.g. compiled vs not)
+        # strict=False is safer when moving between compiled/uncompiled or if LoRA keys shift
+        try:
+            model.load_state_dict(checkpoint["state_dict"], strict=False)
+            logging.info("Successfully loaded pretrained state dict")
+        except Exception as e:
+            logging.warning(f"Error loading state dict (trying strict=False): {e}")
 
     wandb.define_metric("val_loss", summary="min")
 

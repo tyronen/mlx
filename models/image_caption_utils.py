@@ -1,5 +1,6 @@
 import kagglehub
 import torch
+import json
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import csv
@@ -7,6 +8,7 @@ import os
 
 BASE_FLICKR_MODEL_FILE = "data/base_flickr_model.pth"
 BASE_COCO_MODEL_FILE = "data/base_coco_model.pth"
+OFFICIAL_COCO_MODEL_FILE = "data/official_coco_model.pth"
 CUSTOM_FLICKR_MODEL_FILE = "data/custom_flickr_model.pth"
 CUSTOM_COCO_MODEL_FILE = "data/custom_coco_model.pth"
 DATA_FRACTION = 0.004
@@ -33,12 +35,62 @@ def get_flickr(test_mode=False):
     return image_dir, filenames, rows
 
 
-def get_coco(test_mode=False):
+def get_coco(test_mode=False, use_official_captions=False):
     image_dir = "data/coco"
-    filenames, rows = get_images_and_captions(
-        "data/coco/captions.csv", "file_name", image_dir, test_mode
-    )
+    if use_official_captions:
+        filenames, rows = get_images_and_official_captions(
+            "data/annotations/captions_train2017.json", image_dir, test_mode
+        )
+    else:
+        filenames, rows = get_images_and_captions(
+            "data/coco/captions.csv", "file_name", image_dir, test_mode
+        )
     return image_dir, filenames, rows
+
+
+def get_images_and_official_captions(json_path, image_dir, test_mode=False):
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    # Create a map of image_id -> filename
+    image_id_to_filename = {img["id"]: img["file_name"] for img in data["images"]}
+
+    # Collect all captions, mapped to their filenames
+    rows = []
+    for ann in data["annotations"]:
+        img_id = ann["image_id"]
+        if img_id in image_id_to_filename:
+            rows.append(
+                {"file_name": image_id_to_filename[img_id], "text": ann["caption"]}
+            )
+
+    rows.sort(key=lambda r: r["file_name"])  # deterministic ordering
+
+    if test_mode and DATA_FRACTION < 1:
+        num_rows = max(1, int(DATA_FRACTION * len(rows)))
+        rows = rows[:num_rows]
+
+    # Same filtering logic as the CSV version
+    unique_filenames = list({row["file_name"] for row in rows})
+    existing_filenames = set()
+    missing_count = 0
+
+    for filename in unique_filenames:
+        filepath = os.path.join(image_dir, filename)
+        if os.path.exists(filepath):
+            existing_filenames.add(filename)
+        else:
+            missing_count += 1
+
+    if missing_count > 0:
+        print(f"Warning: {missing_count} image files not found in {image_dir}")
+
+    filtered_rows = [row for row in rows if row["file_name"] in existing_filenames]
+    filenames = [f for f in unique_filenames if f in existing_filenames]
+
+    print(f"Loaded {len(filenames)} images with {len(filtered_rows)} official captions")
+
+    return filenames, filtered_rows
 
 
 def get_images_and_captions(captions_path, field_name, image_dir, test_mode=False):

@@ -12,7 +12,7 @@ from peft import LoraConfig, get_peft_model
 from models import image_caption_utils
 from common import utils
 
-CLIP = "openai/clip-vit-base-patch32"
+CLIP = "openai/clip-vit-large-patch14"
 VIT = "google/vit-base-patch16-224-in21k"
 FLICKR_FEATURES_PATH = "data/flickr_features.pt"
 COCO_FEATURES_PATH = "data/coco_features.pt"
@@ -90,7 +90,8 @@ class Flickr30kDataset(ImageDataset):
 
 
 class CocoDataset(ImageDataset):
-    def __init__(self, split="train"):
+    def __init__(self, split="train", use_official_captions=False):
+        self.use_official_captions = use_official_captions
         super().__init__(
             file_field="file_name",
             caption_field="text",
@@ -99,7 +100,9 @@ class CocoDataset(ImageDataset):
         )
 
     def get_images(self):
-        return image_caption_utils.get_coco()
+        return image_caption_utils.get_coco(
+            use_official_captions=self.use_official_captions
+        )
 
 
 def attention(k_dim, q, k, v, mask_tensor):
@@ -311,7 +314,7 @@ class CombinedTransformer(nn.Module):
                     p.requires_grad = True
             self.token_proj = nn.Identity()
             img_proj_out = base.config.hidden_size
-        self.image_projection = nn.Linear(768, img_proj_out)
+        self.image_projection = nn.Linear(1024, img_proj_out)
 
     def embed_input_ids(self, input_ids):
         # Create embeddings for the tokens generated so far
