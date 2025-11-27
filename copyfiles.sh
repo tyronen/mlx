@@ -3,10 +3,10 @@
 REMOTE="mlx"
 
 function send() {
-    rsync -vrt --exclude='__pycache__' "$1" "$REMOTE:/workspace/mlx/$2"
+    rsync -vrt --exclude='__pycache__' $1 "$REMOTE:/workspace/mlx/$2"
 }
 
-send *.sh
+send "*.sh" 
 send check_gpu.py
 send api
 send common
@@ -15,7 +15,7 @@ send training
 send ui
 #send data/*.pth data/
 #send data/*.pt data/
-send data/*.json data/
+send "data/*.json" data/
 send data/hn_predict data/
 send data/msmarco_search data/
-send data/*.rdb data/
+send "data/*.rdb" data/

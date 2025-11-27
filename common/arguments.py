@@ -19,4 +19,9 @@ def get_parser(description):
         choices=["coco", "flickr"],
         help="Dataset to use: 'coco' or 'flickr' (default: coco)",
     )
+    parser.add_argument(
+        "--official_captions",
+        action="store_true",
+        help="Use official COCO captions instead of synthetic ones",
+    )
     return parser

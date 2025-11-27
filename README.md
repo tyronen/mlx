@@ -105,13 +105,13 @@ On some hardwares, CUDA registers as unavailable. You can run `check_gpu.py` to 
 
 ```
 # Generate synthetic dataset from COCO
+python -m training.image_caption.download_coco
 python -m training.image_caption.synthetic_generator
 python -m training.image_caption.fix_metadata
 # Precompute image features
-python -m training.image_caption.precompute_images
-python -m training.image_caption.precompute_images --dataset=flickr
-python -m training.image_caption.train_models --dataset=flickr
-python -m training.image_caption.train_models
+python -m training.image_caption.precompute_images --official_captions
+python -m training.image_caption.train_models --official_captions
+python -m training.image_caption.train_models --epochs 3 --finetune_from data/official_coco_model.pth
 ```
 
 ## Week 5a - Urban sounds

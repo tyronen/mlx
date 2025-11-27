@@ -4,6 +4,7 @@ import random
 import re
 import tempfile
 import zipfile
+import json
 from pathlib import Path
 
 import requests
@@ -11,6 +12,7 @@ import streamlit as st
 import torch
 from PIL import Image
 import logging
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from models import image_caption, image_caption_utils
 from common import utils
 
@@ -22,31 +24,18 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 DEVICE = utils.get_device()
 COCO_TEST_DIR_CANDIDATES = [
     Path("data/coco"),
-    # Path("data/coco_test2017"),
-    # Path("data/coco_test"),
-    # Path("data/test2017"),
-    # Path("data/coco/test2017"),
 ]
 COCO_TEST_ZIP_URL = "http://images.cocodataset.org/zips/test2017.zip"
 COCO_TEST_ZIP_NAME = "test2017.zip"
 
 
-def load_model(dataset, custom):
+def load_model(model_type="base"):
     filename = (
-        image_caption_utils.CUSTOM_FLICKR_MODEL_FILE
-        if dataset == "flickr" and custom
-        else (
-            image_caption_utils.CUSTOM_COCO_MODEL_FILE
-            if dataset == "coco" and custom
-            else (
-                (
-                    image_caption_utils.BASE_FLICKR_MODEL_FILE
-                    if dataset == "flickr"
-                    else image_caption_utils.BASE_COCO_MODEL_FILE
-                )
-            )
-        )
+        image_caption_utils.OFFICIAL_COCO_MODEL_FILE
+        if model_type == "official"
+        else image_caption_utils.BASE_COCO_MODEL_FILE
     )
+
     checkpoint = torch.load(filename, map_location=DEVICE)
     model = image_caption.CombinedTransformer(
         model_dim=checkpoint["model_dim"],
@@ -54,7 +43,7 @@ def load_model(dataset, custom):
         num_heads=checkpoint["num_heads"],
         num_decoders=checkpoint["num_decoders"],
         dropout=checkpoint["dropout"],
-        use_custom_decoder=custom,
+        use_custom_decoder=False,
     )
     model.load_state_dict(checkpoint["state_dict"])
     model.to(DEVICE)
@@ -63,11 +52,58 @@ def load_model(dataset, custom):
 
 
 @st.cache_resource
-def load_models():
+def load_grammar_model():
+    """Load the grammar refinement model (Qwen2.5-0.5B-Instruct)"""
+    model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    # Load in bfloat16 for efficiency
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto",
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16,
+    )
+    return tokenizer, model
+
+
+def refine_caption_grammar(tokenizer, model, draft_caption):
+    """Use the instruct model to fix grammar"""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful assistant that fixes grammar. "
+                "Rewrite the user's text as a single, natural English sentence "
+                "describing an image. Do not add new information."
+            ),
+        },
+        {"role": "user", "content": draft_caption},
+    ]
+    text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    inputs = tokenizer([text], return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **inputs, max_new_tokens=64, temperature=0.3, top_p=0.9
+        )
+
+    # Decode only the new tokens
+    generated_ids = [
+        output_ids[len(input_ids) :]
+        for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    return response.strip()
+
+
+@st.cache_resource
+def load_models(model_type="base"):
     """Load the trained model"""
     encoder = image_caption.ImageEncoder()
-    coco_model = load_model(dataset="coco", custom=False)
-    st.success("Model loaded successfully!")
+    coco_model = load_model(model_type=model_type)
+    st.success(f"Loaded {model_type} model successfully!")
     return encoder, coco_model
 
 
@@ -217,7 +253,10 @@ def _beam_search_decode(
     length_penalty,
 ):
     eos = model.tokenizer.eos_token_id
-    beams = [([model.tokenizer.bos_token_id], 0.0, False)]
+    # Use prompt to guide beam search too
+    prompt_tokens = model.tokenizer.encode("A photo of", add_special_tokens=False)
+    start_seq = [model.tokenizer.bos_token_id] + prompt_tokens
+    beams = [(start_seq, 0.0, False)]
     completed = []
 
     for _ in range(max_length):
@@ -329,8 +368,10 @@ def generate_caption(
             caption = _capitalize_sentences(caption)
             return caption
 
-        # Initialize with BOS token
-        generated = [model.tokenizer.bos_token_id]
+        # Initialize with BOS token + prompt to guide grammar
+        # "A photo of" helps ground the decoder into descriptive English mode
+        prompt_tokens = model.tokenizer.encode("A photo of", add_special_tokens=False)
+        generated = [model.tokenizer.bos_token_id] + prompt_tokens
 
         # Generate tokens one by one
         for _ in range(max_length):
@@ -401,63 +442,105 @@ def main():
             "to one of: data/coco_test2017, data/coco_test, data/coco/test2017, data/coco."
         )
         return
-    encoder, coco_model = load_models()
+
+    model_choice = st.sidebar.radio(
+        "Model Version",
+        ["Style Fine-tuned", "Foundation (Official)"],
+        index=0,
+        help="Switch between the style-adapted model and the foundation model trained on official captions.",
+    )
+    model_type = "base" if model_choice == "Style Fine-tuned" else "official"
+
+    encoder, coco_model = load_models(model_type=model_type)
 
     # Initialize session state variables if they don't exist
     if "coco_test_path" not in st.session_state:
         st.session_state.coco_test_path = ""
     if "coco_caption" not in st.session_state:
         st.session_state.coco_caption = ""
+    if "correct_caption" not in st.session_state:
+        st.session_state.correct_caption = []
 
-    if st.button("Random test image 🚀"):
-        st.session_state.coco_test_path = str(random.choice(coco_files))
-        st.session_state.coco_caption = ""
-
-    # Decoding parameters
-    with st.expander("Decoding settings"):
-        c1, c2, c3 = st.columns(3)
+    # Settings form
+    with st.sidebar.form("generation_settings"):
+        st.subheader("Decoding Settings")
+        c1, c2 = st.columns(2)
         temperature = c1.slider("Temperature", 0.0, 2.0, 0.0, 0.05)
         top_p = c2.slider("Top-p (nucleus)", 0.0, 1.0, 1.0, 0.01)
+
+        c3, c4 = st.columns(2)
         top_k = c3.slider("Top-k (0 = off)", 0, 200, 0, 1)
-        c4, c5 = st.columns(2)
         repetition_penalty = c4.slider("Repetition penalty", 1.0, 2.0, 1.2, 0.05)
-        no_repeat_ngram_size = c5.slider("No-repeat n-gram size", 0, 5, 4, 1)
-        max_length = st.slider("Max length", 8, 64, 24, 1)
-        c6, c7 = st.columns(2)
-        beam_width = c6.slider("Beam width", 1, 8, 3, 1)
-        length_penalty = c7.slider("Length penalty", 0.0, 1.5, 0.6, 0.05)
+
+        c5, c6 = st.columns(2)
+        no_repeat_ngram_size = c5.slider("No-repeat n-gram", 0, 5, 4, 1)
+        max_length = c6.slider("Max length", 8, 64, 24, 1)
+
+        c7, c8 = st.columns(2)
+        beam_width = c7.slider("Beam width", 1, 8, 3, 1)
+        length_penalty = c8.slider("Length penalty", 0.0, 1.5, 0.6, 0.05)
+
         if beam_width > 1:
-            st.caption("Beam search overrides temperature/top-k/p sampling.")
+            st.caption("Beam search active (overrides temp/top-k).")
         else:
-            st.caption("Sampling mode uses temperature/top-k/p.")
+            st.caption("Sampling mode active.")
+
+        st.divider()
+        enable_grammar_refinement = st.checkbox(
+            "✨ Refine Grammar (Beta)",
+            value=False,
+            help="Uses a tiny LLM to rewrite the output into natural English.",
+        )
+
+        submitted = st.form_submit_button("Apply Settings & Generate")
+
+    # Image selection (outside form so it updates immediately)
+    if st.button("Random test image 🚀"):
+        st.session_state.coco_test_path = str(random.choice(coco_files))
+        # Clear previous captions when image changes
+        st.session_state.coco_caption = ""
+        st.session_state.correct_caption = []
+        # We want to trigger generation immediately for a new image
+        submitted = True
 
     image_path = st.session_state.coco_test_path
     if image_path:
         image = Image.open(image_path).convert("RGB")
         st.write(f"Image path: {Path(image_path).name} (from {coco_dir})")
         st.image(image)
-        with st.spinner("Generating captions..."), torch.no_grad():
 
-            image_features = encoder([image])
+        # Only generate if button pressed or new image selected
+        if submitted or (st.session_state.coco_caption == "" and image_path):
+            with st.spinner("Generating captions..."), torch.no_grad():
+                image_features = encoder([image])
+                coco_caption = generate_caption(
+                    image_features,
+                    coco_model,
+                    max_length,
+                    temperature,
+                    top_p,
+                    top_k,
+                    repetition_penalty,
+                    no_repeat_ngram_size,
+                    beam_width,
+                    length_penalty,
+                )
 
-            coco_caption = generate_caption(
-                image_features,
-                coco_model,
-                max_length,
-                temperature,
-                top_p,
-                top_k,
-                repetition_penalty,
-                no_repeat_ngram_size,
-                beam_width,
-                length_penalty,
-            )
-            correct_caption = official_caption(image_path.split("/")[-1])
-            st.session_state.coco_caption = coco_caption
-            st.session_state.correct_caption = correct_caption
+                if enable_grammar_refinement:
+                    with st.spinner("Refining grammar..."):
+                        cleaner_tokenizer, cleaner_model = load_grammar_model()
+                        coco_caption = refine_caption_grammar(
+                            cleaner_tokenizer, cleaner_model, coco_caption
+                        )
 
-        st.markdown(f"**Caption:** {st.session_state.coco_caption}")
-        st.markdown(f"**Correct caption:** {st.session_state.correct_caption}")
+                correct_caption = official_caption(image_path.split("/")[-1])
+                st.session_state.coco_caption = coco_caption
+                st.session_state.correct_caption = correct_caption
+
+        if st.session_state.coco_caption:
+            st.markdown(f"**Caption:** {st.session_state.coco_caption}")
+        if st.session_state.correct_caption:
+            st.markdown(f"**Correct caption:** {st.session_state.correct_caption}")
     else:
         st.info("👆 Click “Random test image” to caption a sample.")
 

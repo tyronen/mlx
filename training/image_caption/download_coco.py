@@ -25,7 +25,7 @@ USER_AGENT = (
 )
 
 
-def get_coco_urls(num_images, split="train2017"):
+def get_coco_urls(num_images=-1, split="train2017"):
     """Get COCO image URLs - much faster than Wikimedia API calls."""
     logging.info(f"Downloading COCO {split} annotations...")
 
@@ -86,9 +86,14 @@ def get_coco_urls(num_images, split="train2017"):
         images_info = annotations["images"]
         logging.info(f"Found {len(images_info)} images in COCO {split}")
 
-        # Sample the requested number
-        random.seed(42)  # Reproducible
-        sampled_images = random.sample(images_info, min(num_images, len(images_info)))
+        # Sample the requested number of images, or all if num_images <= 0
+        if num_images > 0:
+            random.seed(42)  # Reproducible
+            sampled_images = random.sample(
+                images_info, min(num_images, len(images_info))
+            )
+        else:
+            sampled_images = images_info
 
         images = []
         for img_info in sampled_images:
@@ -219,7 +224,7 @@ def main():
     utils.setup_logging()
     os.makedirs("data/coco", exist_ok=True)
 
-    sample_images = get_coco_urls(60000)
+    sample_images = get_coco_urls()
     if sample_images:
         asyncio.run(download_sample(sample_images))
     else:

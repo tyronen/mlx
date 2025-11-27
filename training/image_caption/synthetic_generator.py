@@ -307,12 +307,14 @@ def main():
 
     if device.type == "cuda":
         cpu_count = os.cpu_count() or 1
-        num_workers = max(2, min(16, cpu_count))
+        # Reduced number of workers to prevent OOM with large batches
+        num_workers = max(2, min(8, cpu_count))
     elif device.type == "mps":
         num_workers = 0
     else:
         num_workers = 3
-    prefetch_factor = 4 if (device.type == "cuda" and num_workers > 0) else 2
+    # Reduced prefetch factor to limit buffered images in RAM
+    prefetch_factor = 2 if (device.type == "cuda" and num_workers > 0) else 2
 
     dataloader = DataLoader(
         coco_dataset,
@@ -326,53 +328,64 @@ def main():
         collate_fn=coco_collate,
     )
 
-    synthetic_dataset = dict()
-
-    for batch_idx, (batch_images, batch_paths) in enumerate(
-        tqdm(dataloader, desc="Generating captions")
-    ):
-        try:
-            # Profile first 3 batches to identify bottlenecks
-            profile_this_batch = batch_idx < 3
-            if profile_this_batch:
-                logging.info(f"\n=== Profiling Batch {batch_idx} ===")
-                if device.type == "cuda":
-                    logging.info(
-                        f"GPU Memory before: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
-                    )
-
-            captions = generate_captions(
-                device,
-                model,
-                processor,
-                batch_images,
-                batch_paths,
-                profile=profile_this_batch,
-            )
-            for image_path, caption in zip(batch_paths, captions):
-                synthetic_dataset[image_path] = caption
-
-            if profile_this_batch and device.type == "cuda":
-                logging.info(
-                    f"GPU Memory after: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
-                )
-
-            # Clear cache less frequently with large batches
-            if device.type == "cuda" and batch_idx % 50 == 0 and batch_idx > 0:
-                torch.cuda.empty_cache()
-
-        except Exception as e:
-            logging.info(f"Error processing batch {batch_idx}: {e}")
-            continue
-
+    # Use incremental writing to avoid holding all captions in memory and preventing data loss on crash
     output_csv = pathlib.Path("data/coco/metadata.csv")
+    # Ensure directory exists
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    mode = "w"
+    # Check if we should resume (simple check: if file exists, append?
+    # For now, let's overwrite to restart cleanly as requested, or append if we wanted resume logic.
+    # Given the crash, a restart is safer unless we implement robust resume logic.)
+    # We will use "w" to start fresh, but keep the file open.
+
     with output_csv.open("w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["file_name", "text"])  # header row
-        for img_path, caption in synthetic_dataset.items():
-            writer.writerow([pathlib.Path(img_path).name, caption])
 
-    logging.info(f"Wrote {len(synthetic_dataset)} captions to {output_csv}")
+        for batch_idx, (batch_images, batch_paths) in enumerate(
+            tqdm(dataloader, desc="Generating captions")
+        ):
+            try:
+                # Profile first 3 batches to identify bottlenecks
+                profile_this_batch = batch_idx < 3
+                if profile_this_batch:
+                    logging.info(f"\n=== Profiling Batch {batch_idx} ===")
+                    if device.type == "cuda":
+                        logging.info(
+                            f"GPU Memory before: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
+                        )
+
+                captions = generate_captions(
+                    device,
+                    model,
+                    processor,
+                    batch_images,
+                    batch_paths,
+                    profile=profile_this_batch,
+                )
+
+                # Write immediately to file
+                rows = []
+                for image_path, caption in zip(batch_paths, captions):
+                    rows.append([pathlib.Path(image_path).name, caption])
+                writer.writerows(rows)
+                csvfile.flush()  # Ensure data is written to disk
+
+                if profile_this_batch and device.type == "cuda":
+                    logging.info(
+                        f"GPU Memory after: {torch.cuda.memory_allocated()/1e9:.2f}GB / {torch.cuda.memory_reserved()/1e9:.2f}GB"
+                    )
+
+                # Clear cache less frequently with large batches
+                if device.type == "cuda" and batch_idx % 50 == 0 and batch_idx > 0:
+                    torch.cuda.empty_cache()
+
+            except Exception as e:
+                logging.info(f"Error processing batch {batch_idx}: {e}")
+                continue
+
+    logging.info(f"Completed generation. Output written to {output_csv}")
 
 
 if __name__ == "__main__":

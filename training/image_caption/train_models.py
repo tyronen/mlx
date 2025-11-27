@@ -11,11 +11,6 @@ from models import image_caption, image_caption_utils
 
 parser = arguments.get_parser(description="Train simple model")
 parser.add_argument(
-    "--official_captions",
-    action="store_true",
-    help="Use official COCO captions instead of synthetic ones",
-)
-parser.add_argument(
     "--finetune_from",
     type=str,
     default=None,
@@ -31,10 +26,11 @@ hyperparameters = {
     "ffn_dim": 1536,
     "num_heads": 8,
     "num_decoders": 4,
-    "learning_rate": 5e-4,
-    "epochs": 50,
-    "dropout": 0.1,
+    "learning_rate": 1e-4,
+    "epochs": int(args.epochs),
+    "dropout": 0.3,
     "patience": 3,
+    "weight_decay": 1e-3,
     "label_smoothing": 0.1,
     "use_custom_decoder": args.custom,
     "dataset": args.dataset,
@@ -244,6 +240,7 @@ def run_training(config, **_):
     optimizer = optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=config["learning_rate"],
+        weight_decay=config["weight_decay"],
     )
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=total_steps, eta_min=1e-6

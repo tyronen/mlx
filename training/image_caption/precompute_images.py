@@ -28,7 +28,7 @@ def collate_fn(batch):
     return list(filenames), list(images)
 
 
-def main(dataset_name, test_mode):
+def main(dataset_name, test_mode, official_captions):
     model = image_caption.ImageEncoder()
     model.eval()
 
@@ -36,7 +36,9 @@ def main(dataset_name, test_mode):
         imagepath, image_filenames, _ = image_caption_utils.get_flickr(test_mode)
         output_path = image_caption.FLICKR_FEATURES_PATH
     elif dataset_name == "coco":
-        imagepath, image_filenames, _ = image_caption_utils.get_coco(test_mode)
+        imagepath, image_filenames, _ = image_caption_utils.get_coco(
+            test_mode, official_captions
+        )
         output_path = image_caption.COCO_FEATURES_PATH
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}. Choose 'coco' or 'flickr'.")
@@ -70,4 +72,4 @@ if __name__ == "__main__":
         description="Precompute image embeddings for image captioning"
     )
     args = parser.parse_args()
-    main(args.dataset, args.check)
+    main(args.dataset, args.check, args.official_captions)
