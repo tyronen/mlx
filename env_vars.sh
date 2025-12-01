@@ -23,3 +23,7 @@ export MAX_JOBS=8                         # ninja job slots  (keeps RAM down)
 export NVCC_THREADS=8                     # threads per nvcc compile
 export NINJAFLAGS="-j8"
 export TMPDIR=/dev/shm
+
+
+export TORCHINDUCTOR_CACHE_DIR=/tmp/.torchinductor
+export TRITON_CACHE_DIR=/tmp/.triton

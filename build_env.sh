@@ -41,6 +41,4 @@ pip install -r api/requirements.txt -c training/constraints.txt
 
 wandb login $WANDB_KEY
 
-export TORCHINDUCTOR_CACHE_DIR=/tmp/.torchinductor
-export TRITON_CACHE_DIR=/tmp/.triton
 
