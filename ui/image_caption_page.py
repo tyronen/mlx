@@ -61,7 +61,7 @@ def load_grammar_model():
         model_id,
         device_map="auto",
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
     )
     return tokenizer, model
 
@@ -512,7 +512,12 @@ def main():
         # Only generate if button pressed or new image selected
         if submitted or (st.session_state.coco_caption == "" and image_path):
             with st.spinner("Generating captions..."), torch.no_grad():
-                image_features = encoder([image])
+                # Preprocess image
+                inputs = encoder.processor(images=image, return_tensors="pt")
+                pixel_values = inputs.pixel_values
+                # Run encoder
+                image_features = encoder(pixel_values)
+
                 coco_caption = generate_caption(
                     image_features,
                     coco_model,

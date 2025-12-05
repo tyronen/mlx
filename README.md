@@ -108,10 +108,10 @@ On some hardwares, CUDA registers as unavailable. You can run `check_gpu.py` to 
 python -m training.image_caption.download_coco
 python -m training.image_caption.synthetic_generator
 python -m training.image_caption.fix_metadata
-# Precompute image features
-python -m training.image_caption.precompute_images --official_captions
-python -m training.image_caption.train_models --official_captions
-python -m training.image_caption.train_models --epochs 3 --finetune_from data/official_coco_model.pth
+python -m training.image_caption.precompute_images --max_vision_tokens 64 --official_captions
+python -m training.image_caption.train_models --epochs 12 --official_captions --max_vision_tokens 64 --accumulation_steps 4 --max_batch_size 512
+python -m training.image_caption.train_models --epochs 3 --official_captions --max_vision_tokens 128 --accumulation_steps 4 --max_batch_size 512 --finetune_from data/official_coco_model.pth
+python -m training.image_caption.train_models --epochs 3 --max_vision_tokens 128 --accumulation_steps 4 --max_batch_size 512 --finetune_from data/official_coco_model.pth
 ```
 
 ## Week 5a - Urban sounds
@@ -119,7 +119,7 @@ python -m training.image_caption.train_models --epochs 3 --finetune_from data/of
 ```
 # GPU
 python -m training.urban_sounds.audio_data
-python -m traiing.urban_sounds.train_model
+python -m training.urban_sounds.train_model
 ```
 
 This was demonstration exercise which merely attempted to train the model, not use it.

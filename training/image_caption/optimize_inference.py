@@ -1,12 +1,12 @@
 import torch
-import json
 from pathlib import Path
 from tqdm import tqdm
 import sacrebleu
 import itertools
-from models import image_caption, image_caption_utils
+from PIL import Image
+import os
+from models import image_caption
 from common import utils
-import logging
 
 # Setup
 utils.setup_logging()
@@ -186,13 +186,13 @@ def get_val_data(limit=200):
     selected_files = sorted(list(unique_files))[:limit]
     print(f"Selected {len(selected_files)} images for evaluation.")
 
-    # Prepare dataset: list of (feature_tensor, [ref_captions])
+    # Prepare dataset: list of (image_path, [ref_captions])
     eval_data = []
     print(f"[DEBUG] Image: {selected_files[0]}")
     for fname in selected_files:
-        feat = ds.image_features[fname].to(DEVICE)  # [1024] or similar
+        image_path = os.path.join(ds.image_dir, fname)
         refs = image_to_captions[fname]
-        eval_data.append((feat, refs))
+        eval_data.append((image_path, refs))
 
     return eval_data
 
@@ -217,20 +217,29 @@ def load_trained_model(model_path):
     return model
 
 
-def evaluate_config(model, data, config):
+def evaluate_config(model, vision_encoder, data, config):
     refs = []
     preds = []
 
     # Run inference
-    for i, (img_feat, captions) in tqdm(
+    for i, (image_path, captions) in tqdm(
         enumerate(data), leave=False, desc="Inferencing"
     ):
-        if img_feat.dim() == 1:
-            img_feat = img_feat.unsqueeze(0)
+        try:
+            # Load and process image
+            image = Image.open(image_path).convert("RGB")
+            inputs = vision_encoder.processor(images=image, return_tensors="pt")
+            pixel_values = inputs.pixel_values.to(DEVICE)
 
-        with torch.no_grad():
-            proj_feats = model.image_projection(img_feat)
-            pred = generate_caption_inference(model, proj_feats, config)
+            with torch.no_grad():
+                # Encode image [B, 257, 1024]
+                img_feat = vision_encoder(pixel_values)
+                # Project and generate
+                proj_feats = model.image_projection(img_feat)
+                pred = generate_caption_inference(model, proj_feats, config)
+        except Exception as e:
+            print(f"Error processing {image_path}: {e}")
+            pred = ""
 
         # DEBUG: Print first prediction and reference to see if model works
         if i == 0:
@@ -241,15 +250,9 @@ def evaluate_config(model, data, config):
         refs.append(captions)  # List of strings
 
     # Compute SacreBLEU
-    # sacrebleu.corpus_bleu expects:
-    # sys: list of N hypotheses
-    # refs: list of list of references (transposed!) -> [[ref1_i for i in N], [ref2_i for i in N]...]
-
-    # Transpose refs
     max_refs = max(len(r) for r in refs)
     transposed_refs = []
     for k in range(max_refs):
-        # Get k-th ref for each image, or empty string if missing
         ref_k = [r[k] if k < len(r) else "" for r in refs]
         transposed_refs.append(ref_k)
 
@@ -266,10 +269,12 @@ def main():
 
     model = load_trained_model(model_path)
 
+    # Load Vision Encoder
+    vision_encoder = image_caption.ImageEncoder().to(DEVICE)
+    vision_encoder.eval()
+
     # 2. Prepare Data
     eval_data = get_val_data(limit=50)  # 50 images for faster feedback loop
-
-    # 3. Setup Metric (SacreBLEU handles this internally)
 
     # 4. Define Grid
     grid = {
@@ -291,7 +296,7 @@ def main():
     best_cfg = None
 
     for cfg in combinations:
-        score = evaluate_config(model, eval_data, cfg)
+        score = evaluate_config(model, vision_encoder, eval_data, cfg)
 
         print(
             f"{cfg['beam_width']:<5} {cfg['length_penalty']:<8.1f} {cfg['repetition_penalty']:<8.1f} {cfg['no_repeat_ngram_size']:<6} | {score:.4f}"

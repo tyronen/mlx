@@ -5,6 +5,27 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 import csv
 import os
+import numpy as np
+from functools import lru_cache
+from typing import List, Tuple
+
+FLICKR_FEATURES_PATH = "data/flickr_features.pt"
+COCO_FEATURES_PATH = "data/coco_features.pt"
+
+
+def feature_paths(
+    dataset: str, use_official_captions: bool, max_tokens: int
+) -> Tuple[str, str]:
+    if dataset == "flickr":
+        base = os.path.splitext(FLICKR_FEATURES_PATH)[0]
+    elif dataset == "coco":
+        base = os.path.splitext(COCO_FEATURES_PATH)[0]
+    else:
+        raise ValueError(f"Unknown dataset '{dataset}' for feature paths")
+    meta_path = f"{base}_max_vision_tokens_{max_tokens}.pt"
+    bin_path = f"{base}_max_vision_tokens_{max_tokens}.bin"
+    return meta_path, bin_path
+
 
 BASE_FLICKR_MODEL_FILE = "data/base_flickr_model.pth"
 BASE_COCO_MODEL_FILE = "data/base_coco_model.pth"
@@ -26,6 +47,64 @@ if added_specials:
     TOKENIZER.add_special_tokens(added_specials)
 
 
+class PrecomputedFeatureStore:
+    """
+    Memory-mapped access to precomputed vision embeddings keyed by filename.
+    """
+
+    def __init__(self, metadata_path: str):
+        self.metadata_path = os.path.abspath(metadata_path)
+        self._load_metadata()
+        self._open_memmap()
+
+    def _load_metadata(self):
+        meta = torch.load(self.metadata_path)
+        self.feature_path = os.path.join(
+            os.path.dirname(self.metadata_path), meta["feature_path"]
+        )
+        self.shape = tuple(meta["shape"])
+        dtype_spec = meta.get("dtype", "float16")
+        # Handle both "float16" and "<class 'numpy.float16'>" formats
+        if isinstance(dtype_spec, str):
+            # Extract just the dtype name if it's in the "<class 'numpy.X'>" format
+            if "numpy." in dtype_spec:
+                dtype_spec = dtype_spec.split("numpy.")[1].rstrip("'>\"")
+            self.dtype = np.dtype(dtype_spec)
+        else:
+            self.dtype = dtype_spec
+        self.max_vision_tokens = meta.get("max_vision_tokens", self.shape[1])
+        self.filenames = list(meta["filenames"])
+        self.filename_to_idx = {fname: idx for idx, fname in enumerate(self.filenames)}
+        self.dataset = meta.get("dataset")
+        self.use_official_captions = meta.get("use_official_captions")
+
+    def _open_memmap(self):
+        self.memmap = np.memmap(
+            self.feature_path, mode="r+", dtype=self.dtype, shape=self.shape
+        )
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["memmap"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__ = state
+        self._open_memmap()
+
+    def get(self, filename: str) -> torch.Tensor:
+        idx = self.filename_to_idx.get(filename)
+        if idx is None:
+            raise KeyError(
+                f"Precomputed features missing entry for image '{filename}'. "
+                "Ensure precompute_images was run with matching dataset."
+            )
+        array = self.memmap[idx]
+        tensor = torch.from_numpy(array)
+        return tensor
+
+
+@lru_cache(maxsize=1)
 def get_flickr(test_mode=False):
     imagepath = kagglehub.dataset_download("adityajn105/flickr30k")
     image_dir = f"{imagepath}/Images"
@@ -35,6 +114,7 @@ def get_flickr(test_mode=False):
     return image_dir, filenames, rows
 
 
+@lru_cache(maxsize=2)
 def get_coco(test_mode=False, use_official_captions=False):
     image_dir = "data/coco"
     if use_official_captions:
@@ -72,12 +152,19 @@ def get_images_and_official_captions(json_path, image_dir, test_mode=False):
 
     # Same filtering logic as the CSV version
     unique_filenames = list({row["file_name"] for row in rows})
+
+    # Optimize: Check against directory listing instead of os.path.exists for each file
+    try:
+        all_files = set(os.listdir(image_dir))
+    except FileNotFoundError:
+        print(f"Warning: Image directory {image_dir} not found.")
+        all_files = set()
+
     existing_filenames = set()
     missing_count = 0
 
     for filename in unique_filenames:
-        filepath = os.path.join(image_dir, filename)
-        if os.path.exists(filepath):
+        if filename in all_files:
             existing_filenames.add(filename)
         else:
             missing_count += 1
@@ -106,12 +193,19 @@ def get_images_and_captions(captions_path, field_name, image_dir, test_mode=Fals
 
     # Get unique filenames and check which ones exist
     unique_filenames = list({row[field_name] for row in rows})
+
+    # Optimize: Check against directory listing instead of os.path.exists for each file
+    try:
+        all_files = set(os.listdir(image_dir))
+    except FileNotFoundError:
+        print(f"Warning: Image directory {image_dir} not found.")
+        all_files = set()
+
     existing_filenames = set()
     missing_count = 0
 
     for filename in unique_filenames:
-        filepath = os.path.join(image_dir, filename)
-        if os.path.exists(filepath):
+        if filename in all_files:
             existing_filenames.add(filename)
         else:
             missing_count += 1
@@ -129,16 +223,33 @@ def get_images_and_captions(captions_path, field_name, image_dir, test_mode=Fals
 
 
 def collate_fn(batch):
-    images, input_ids = zip(*batch)
+    images, inputs = zip(*batch)
     images = torch.stack(images)  # [B, 768]
-    input_ids = torch.stack(input_ids)  # [B, L]
-    return {"images": images, "input_ids": input_ids}
+
+    # Check if inputs are lists of tensors (grouped mode) or single tensors
+    if (
+        isinstance(inputs[0], torch.Tensor) and inputs[0].dim() == 2
+    ):  # Grouped: [num_caps, L]
+        # We need to return a structure that indicates how many captions per image
+        # Flatten input_ids: [B * num_caps_avg, L]
+        num_captions_per_image = [inp.size(0) for inp in inputs]
+        input_ids = torch.cat(inputs, dim=0)
+        return {
+            "images": images,
+            "input_ids": input_ids,
+            "num_captions_per_image": num_captions_per_image,
+        }
+    else:
+        # Standard mode: inputs are [L] tensors
+        input_ids = torch.stack(inputs)
+        return {"images": images, "input_ids": input_ids}
 
 
 class CustomDataLoader(DataLoader):
     def __init__(self, dataset, device, batch_size, train=False):
-        # Reduced workers to avoid "Too many open files" with large batch sizes
-        num_workers = 4 if device.type == "cuda" else 0 if device.type == "mps" else 2
+        # Always use workers to hide IO latency, even for precomputed memmaps.
+        # We rely on OS page cache or copy-on-read to handle concurrency.
+        num_workers = 8 if device.type == "cuda" else 0 if device.type == "mps" else 2
         super().__init__(
             dataset,
             batch_size=batch_size,
@@ -146,6 +257,7 @@ class CustomDataLoader(DataLoader):
             drop_last=train,
             pin_memory=(device.type == "cuda"),
             num_workers=num_workers,
-            prefetch_factor=8,  # Increased prefetch for better GPU saturation
+            prefetch_factor=4 if num_workers > 0 else None,
+            persistent_workers=(num_workers > 0),
             collate_fn=collate_fn,
         )
