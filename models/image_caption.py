@@ -187,110 +187,17 @@ class CocoDataset(ImageDataset):
         )
 
 
-def attention(k_dim, q, k, v, mask_tensor):
-    kt = k.transpose(-2, -1)
-    # do attention(Q, K, V) = softmax(Q·K^T / sqrt(dims))·V to get hidden state (where · is dot product)
-    attn_dot_product = torch.matmul(q, kt)
-    attn_scaled = attn_dot_product / math.sqrt(k_dim)
-    if mask_tensor is not None:
-        attn_scaled = attn_scaled.masked_fill(mask_tensor, -torch.inf)
-    attn_probs = torch.softmax(attn_scaled, dim=-1)
-    return torch.matmul(attn_probs, v)
-
-
-class SelfAttention(nn.Module):
-    def __init__(self, model_dim: int, num_heads: int, dropout: float = 0.1):
+class MLPProjector(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int):
         super().__init__()
-        self.num_heads = num_heads
-        self.model_dim = model_dim
-        self.k_dim = model_dim // num_heads
-        self.wqkv = nn.Linear(model_dim, 3 * model_dim, bias=False)
-        self.endmulti = nn.Linear(model_dim, model_dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-    def rearrange(self, vector, B, L):
-        return vector.reshape(B, L, self.num_heads, self.k_dim).transpose(1, 2)
-
-    def forward(self, x, attn_mask):
-        B, L, D = x.shape
-        qkv = self.wqkv(x)
-        q, k, v = qkv.split(self.model_dim, dim=-1)
-        qh = self.rearrange(q, B, L)
-        kh = self.rearrange(k, B, L)
-        vh = self.rearrange(v, B, L)
-
-        mask_tensor = torch.triu(torch.ones(L, L, device=x.device), diagonal=1).bool()
-        # Expand to 1×1×L×L so it can broadcast with per‑batch pad masks and per‑head scores
-        mask_tensor = mask_tensor.unsqueeze(0).unsqueeze(0)
-        pad_mask = (attn_mask == 0).unsqueeze(1).unsqueeze(2)
-        mask_tensor = mask_tensor | pad_mask
-
-        attended = attention(self.k_dim, qh, kh, vh, mask_tensor=mask_tensor)
-        concatted = attended.transpose(1, 2).reshape(B, L, self.model_dim)
-        concatted = self.dropout(concatted)
-        return self.endmulti(concatted)
-
-
-class FeedForward(nn.Module):
-    def __init__(self, model_dim: int, ffn_dim: int, dropout: float = 0.1):
-        super().__init__()
-        self.sequence = nn.Sequential(
-            nn.Linear(model_dim, ffn_dim, bias=True),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(ffn_dim, model_dim, bias=True),
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, output_dim),
+            nn.GELU(),
+            nn.Linear(output_dim, output_dim),
         )
 
     def forward(self, x):
-        return self.sequence(x)
-
-
-class Decoder(nn.Module):
-    def __init__(self, model_dim: int, ffn_dim: int, num_heads: int, dropout: float):
-        super().__init__()
-        self.masked_self_mha = SelfAttention(model_dim=model_dim, num_heads=num_heads)
-        self.norm1 = nn.LayerNorm(model_dim)
-        self.ffn = FeedForward(model_dim=model_dim, ffn_dim=ffn_dim)
-        self.norm2 = nn.LayerNorm(model_dim)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, data, attn_mask):
-        stage1 = self.masked_self_mha(data, attn_mask)
-        addnormed_text = self.norm1(data + self.dropout(stage1))
-        ffned = self.ffn(addnormed_text)
-        return self.norm2(addnormed_text + self.dropout(ffned))
-
-
-class CustomDecoder(nn.Module):
-    def __init__(
-        self,
-        model_dim: int,
-        ffn_dim: int,
-        num_heads: int,
-        num_decoders: int,
-        dropout: float,
-        vocab_size: int,
-    ):
-        super().__init__()
-
-        def make_decoder() -> nn.Module:
-            return Decoder(
-                model_dim=model_dim,
-                ffn_dim=ffn_dim,
-                num_heads=num_heads,
-                dropout=dropout,
-            )
-
-        self.decoder_series = nn.ModuleList(
-            [make_decoder() for _ in range(num_decoders)]
-        )
-        self.linear = nn.Linear(model_dim, vocab_size)
-
-    def forward(self, input, attn_mask):
-        for decoder in self.decoder_series:
-            input = decoder(input, attn_mask)
-
-        return self.linear(input)  # [B, L-1, vocab]
+        return self.net(x)
 
 
 class ImageEncoder(nn.Module):
@@ -356,7 +263,7 @@ class ImageEncoder(nn.Module):
 
 def make_attn_mask(input_ids: torch.Tensor, prefix_len: int = 1):
     """
-    Build a 1/0 attention mask that is accepted by both Qwen3 and our custom decoder.
+    Build a 1/0 attention mask that is accepted by Qwen3
 
     Args:
         input_ids: [B, T] text token ids (no image prefix yet)
@@ -385,7 +292,7 @@ class CombinedTransformer(nn.Module):
         num_heads: int,
         num_decoders: int,
         dropout: float,
-        use_custom_decoder: bool,
+        use_mlp_projector: bool = False,
     ):
         super().__init__()
 
@@ -409,35 +316,27 @@ class CombinedTransformer(nn.Module):
         base.config.pad_token_id = self.tokenizer.pad_token_id
         self.token_embedding = base.model.embed_tokens
         self.token_embedding.requires_grad_(False)
-        self.use_custom_decoder = use_custom_decoder
         for param in base.parameters():
             param.requires_grad = False
 
         img_proj_out = model_dim
-        if use_custom_decoder:
-            self.decoder = CustomDecoder(
-                model_dim=model_dim,
-                ffn_dim=ffn_dim,
-                num_heads=num_heads,
-                num_decoders=num_decoders,
-                dropout=dropout,
-                vocab_size=self.token_embedding.num_embeddings,
-            )
-            self.token_proj = nn.Linear(self.token_embedding.embedding_dim, model_dim)
+        config = LoraConfig(
+            task_type="CAUSAL_LM",
+            r=8,  # LoRA rank
+            lora_alpha=16,
+            lora_dropout=0.05,
+        )
+        self.decoder = get_peft_model(base, config)
+        for name, p in self.decoder.named_parameters():
+            if "lora_" in name:
+                p.requires_grad = True
+        self.token_proj = nn.Identity()
+        img_proj_out = base.config.hidden_size
+
+        if use_mlp_projector:
+            self.image_projection = MLPProjector(1024, img_proj_out)
         else:
-            config = LoraConfig(
-                task_type="CAUSAL_LM",
-                r=8,  # LoRA rank
-                lora_alpha=16,
-                lora_dropout=0.05,
-            )
-            self.decoder = get_peft_model(base, config)
-            for name, p in self.decoder.named_parameters():
-                if "lora_" in name:
-                    p.requires_grad = True
-            self.token_proj = nn.Identity()
-            img_proj_out = base.config.hidden_size
-        self.image_projection = nn.Linear(1024, img_proj_out)
+            self.image_projection = nn.Linear(1024, img_proj_out)
 
     def embed_input_ids(self, input_ids):
         # Create embeddings for the tokens generated so far
@@ -450,9 +349,6 @@ class CombinedTransformer(nn.Module):
         # input_ids: [B, T]
         prefix_len = decoder_input.size(1) - input_ids.size(1)
         attn_mask = make_attn_mask(input_ids, prefix_len=prefix_len)
-
-        if self.use_custom_decoder:
-            return self.decoder(decoder_input, attn_mask)
 
         out = self.decoder(
             inputs_embeds=decoder_input,

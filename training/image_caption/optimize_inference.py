@@ -202,7 +202,7 @@ def load_trained_model(model_path):
         num_heads=checkpoint["num_heads"],
         num_decoders=checkpoint["num_decoders"],
         dropout=checkpoint["dropout"],
-        use_custom_decoder=False,  # Assuming style fine-tuned model uses LoRA/base structure
+        use_mlp_projector=checkpoint.get("use_mlp_projector", False),
     )
     model.load_state_dict(checkpoint["state_dict"])
     model.to(DEVICE)

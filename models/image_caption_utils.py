@@ -30,8 +30,6 @@ def feature_paths(
 BASE_FLICKR_MODEL_FILE = "data/base_flickr_model.pth"
 BASE_COCO_MODEL_FILE = "data/base_coco_model.pth"
 OFFICIAL_COCO_MODEL_FILE = "data/official_coco_model.pth"
-CUSTOM_FLICKR_MODEL_FILE = "data/custom_flickr_model.pth"
-CUSTOM_COCO_MODEL_FILE = "data/custom_coco_model.pth"
 DATA_FRACTION = 0.004
 
 TOKENIZER = AutoTokenizer.from_pretrained(

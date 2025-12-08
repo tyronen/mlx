@@ -35,6 +35,11 @@ parser.add_argument(
     action="store_true",
     help="Profile timing of the model",
 )
+parser.add_argument(
+    "--use_mlp_projector",
+    action="store_true",
+    help="Use MLP for image projection instead of Linear",
+)
 args = parser.parse_args()
 
 
@@ -51,11 +56,11 @@ hyperparameters = {
     "patience": 3,
     "weight_decay": 1e-3,
     "label_smoothing": 0.1,
-    "use_custom_decoder": args.custom,
     "dataset": args.dataset,
     "use_official_captions": args.official_captions,
     "finetune_from": args.finetune_from,
     "max_vision_tokens": args.max_vision_tokens,
+    "use_mlp_projector": args.use_mlp_projector,
 }
 
 sweep_config = {
@@ -77,11 +82,11 @@ sweep_config = {
         "dropout": {"values": [0.0, 0.1, 0.2]},
         "patience": {"values": [3, 5, 10]},
         "label_smoothing": {"values": [0.0, 0.05, 0.1]},
-        "use_custom_decoder": {"values": [args.custom]},
         "dataset": {"values": [args.dataset]},
         "use_official_captions": {"values": [args.official_captions]},
         "finetune_from": {"values": [args.finetune_from]},
         "max_vision_tokens": {"values": [args.max_vision_tokens]},
+        "use_mlp_projector": {"values": [args.use_mlp_projector]},
     },
 }
 
@@ -457,24 +462,16 @@ def run_training(config, **_):
     using_precomputed = True
 
     model_file = (
-        image_caption_utils.CUSTOM_FLICKR_MODEL_FILE
-        if config["dataset"] == "flickr" and config["use_custom_decoder"]
+        image_caption_utils.BASE_FLICKR_MODEL_FILE
+        if config["dataset"] == "flickr"
         else (
-            image_caption_utils.CUSTOM_COCO_MODEL_FILE
-            if config["dataset"] == "coco" and config["use_custom_decoder"]
-            else (
-                image_caption_utils.BASE_FLICKR_MODEL_FILE
-                if config["dataset"] == "flickr"
-                else (
-                    image_caption_utils.OFFICIAL_COCO_MODEL_FILE
-                    if config.get("use_official_captions")
-                    else image_caption_utils.BASE_COCO_MODEL_FILE
-                )
-            )
+            image_caption_utils.OFFICIAL_COCO_MODEL_FILE
+            if config.get("use_official_captions")
+            else image_caption_utils.BASE_COCO_MODEL_FILE
         )
     )
 
-    project = "custom-decoder" if config["use_custom_decoder"] else "base-decoder"
+    project = "base-decoder"
     run = wandb.init(
         entity=args.entity,
         project=project,
@@ -537,7 +534,7 @@ def run_training(config, **_):
         num_heads=config["num_heads"],
         num_decoders=config["num_decoders"],
         dropout=config["dropout"],
-        use_custom_decoder=config["use_custom_decoder"],
+        use_mlp_projector=config.get("use_mlp_projector", False),
     ).to(device)
 
     # If fine-tuning from a checkpoint, load it now
@@ -797,6 +794,7 @@ def run_training(config, **_):
                     "num_heads": config["num_heads"],
                     "num_decoders": config["num_decoders"],
                     "dropout": config["dropout"],
+                    "use_mlp_projector": config.get("use_mlp_projector", False),
                 },
                 model_file,
             )
@@ -828,11 +826,7 @@ def run_training(config, **_):
         {"test_loss": test_loss},
     )
     if not args.check:
-        name = (
-            "basic-decoder-model"
-            if hyperparameters["use_custom_decoder"]
-            else "qwen-decoder-model"
-        )
+        name = "qwen-decoder-model"
     run.finish(0)
 
 

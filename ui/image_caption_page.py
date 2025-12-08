@@ -43,7 +43,7 @@ def load_model(model_type="base"):
         num_heads=checkpoint["num_heads"],
         num_decoders=checkpoint["num_decoders"],
         dropout=checkpoint["dropout"],
-        use_custom_decoder=False,
+        use_mlp_projector=checkpoint.get("use_mlp_projector", False),
     )
     model.load_state_dict(checkpoint["state_dict"])
     model.to(DEVICE)
