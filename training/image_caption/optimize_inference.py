@@ -2,9 +2,11 @@ import torch
 from pathlib import Path
 from tqdm import tqdm
 import sacrebleu
+import statistics
 import itertools
 from PIL import Image
 import os
+import argparse
 from models import image_caption
 from common import utils
 
@@ -167,31 +169,22 @@ def generate_caption_inference(model, image_features, config):
 def get_val_data(limit=200):
     """Load validation features and group ground truth captions by image."""
     print("Loading validation dataset...")
-    # Reuse CocoDataset to handle loading, but we'll process it manually
+    # Reuse CocoDataset to handle loading. With `use_official_captions=True`,
+    # the dataset groups captions per image and stores them in `ds.data` as
+    # (filename, [captions]) tuples, so we don't need to iterate over __getitem__
+    # (which returns tensors).
     ds = image_caption.CocoDataset(split="val", use_official_captions=True)
 
-    # Group by image filename/ID
-    image_to_captions = {}
-    unique_files = set()
-
-    for row in ds.captions:
-        fname = row["file_name"]
-        caption = row["text"]
-        if fname not in image_to_captions:
-            image_to_captions[fname] = []
-        image_to_captions[fname].append(caption)
-        unique_files.add(fname)
-
-    # Select a subset
-    selected_files = sorted(list(unique_files))[:limit]
-    print(f"Selected {len(selected_files)} images for evaluation.")
+    # Select a subset (dataset ordering is deterministic due to seed in dataset)
+    selected = ds.data[:limit]
+    print(f"Selected {len(selected)} images for evaluation.")
 
     # Prepare dataset: list of (image_path, [ref_captions])
     eval_data = []
-    print(f"[DEBUG] Image: {selected_files[0]}")
-    for fname in selected_files:
+    if selected:
+        print(f"[DEBUG] Image: {selected[0][0]}")
+    for fname, refs in selected:
         image_path = os.path.join(ds.image_dir, fname)
-        refs = image_to_captions[fname]
         eval_data.append((image_path, refs))
 
     return eval_data
@@ -223,7 +216,7 @@ def evaluate_config(model, vision_encoder, data, config):
 
     # Run inference
     for i, (image_path, captions) in tqdm(
-        enumerate(data), leave=False, desc="Inferencing"
+        enumerate(data), leave=False, desc="Inferencing", total=len(data)
     ):
         try:
             # Load and process image
@@ -241,11 +234,6 @@ def evaluate_config(model, vision_encoder, data, config):
             print(f"Error processing {image_path}: {e}")
             pred = ""
 
-        # DEBUG: Print first prediction and reference to see if model works
-        if i == 0:
-            print(f"\n[DEBUG] Pred: '{pred}'")
-            print(f"[DEBUG] Ref[0]: '{captions[0]}'")
-
         preds.append(pred)
         refs.append(captions)  # List of strings
 
@@ -260,9 +248,106 @@ def evaluate_config(model, vision_encoder, data, config):
     return bleu.score
 
 
+def summarize_hparam_impacts(results, grid_keys):
+    """Aggregate BLEU scores per hyperparameter value to show impact trends."""
+    print("\nHyperparameter impact (mean/median/best BLEU per value)")
+    for key in grid_keys:
+        buckets = {}
+        for cfg, score in results:
+            buckets.setdefault(cfg[key], []).append(score)
+
+        summary = []
+        for val, scores in buckets.items():
+            if not scores:
+                continue
+            summary.append(
+                (
+                    val,
+                    statistics.stdev(scores) if len(scores) > 1 else 0.0,
+                    statistics.mean(scores),
+                    statistics.median(scores),
+                    max(scores),
+                    min(scores),
+                    len(scores),
+                )
+            )
+        # Sort by MEAN (index 2) descending to show best performers first
+        summary.sort(key=lambda x: x[2], reverse=True)
+
+        print("-" * 80)
+        print(f"{key}:")
+        print(
+            f"{'Value':<10} {'Mean':<10} {'Median':<10} {'Best':<10} {'Stdev':<10} {'Worst':<10} {'N':<5}"
+        )
+        for (
+            val,
+            std_score,
+            mean_score,
+            median_score,
+            best_score,
+            worst_score,
+            count,
+        ) in summary:
+            print(
+                f"{str(val):<10} {mean_score:<10.4f} {median_score:<10.4f} "
+                f"{best_score:<10.4f} {std_score:<10.4f} {worst_score:<10.4f} {count:<5}"
+            )
+        if summary:
+            best_val = summary[0][0]
+            print(f"Best {key} (by mean BLEU): {best_val}")
+    print("-" * 80)
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description="Optimize inference hyperparameters")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=30,
+        help="Number of images to evaluate (default: 30). Increase to 100+ for stable results.",
+    )
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default="data/base_coco_model.pth",
+        help="Path to model",
+    )
+    parser.add_argument(
+        "--beam_width",
+        type=int,
+        nargs="+",
+        default=[1, 2, 3, 4, 5],
+        help="Beam widths to sweep",
+    )
+    parser.add_argument(
+        "--length_penalty",
+        type=float,
+        nargs="+",
+        default=[0.6],
+        help="Length penalties to sweep",
+    )
+    parser.add_argument(
+        "--repetition_penalty",
+        type=float,
+        nargs="+",
+        default=[1.0],
+        help="Repetition penalties to sweep",
+    )
+    parser.add_argument(
+        "--no_repeat_ngram_size",
+        type=int,
+        nargs="+",
+        default=[0],
+        help="No repeat ngram sizes to sweep",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = get_args()
+
     # 1. Load Model
-    model_path = "data/base_coco_model.pth"  # The Style Fine-tuned model
+    model_path = args.model_path
     if not Path(model_path).exists():
         print(f"Model not found at {model_path}")
         return
@@ -274,29 +359,33 @@ def main():
     vision_encoder.eval()
 
     # 2. Prepare Data
-    eval_data = get_val_data(limit=50)  # 50 images for faster feedback loop
+    eval_data = get_val_data(limit=args.limit)
 
     # 4. Define Grid
     grid = {
-        "beam_width": [1],
-        "length_penalty": [0.6],
-        "repetition_penalty": [1.5, 2.0, 2.5],
-        "no_repeat_ngram_size": [0],
+        "beam_width": args.beam_width,
+        "length_penalty": args.length_penalty,
+        "repetition_penalty": args.repetition_penalty,
+        "no_repeat_ngram_size": args.no_repeat_ngram_size,
     }
 
     keys, values = zip(*grid.items())
     combinations = [dict(zip(keys, v)) for v in itertools.product(*values)]
 
-    print(f"Starting sweep over {len(combinations)} configurations...")
-    print("-" * 60)
+    print(
+        f"Starting sweep over {len(combinations)} configurations with limit={args.limit}..."
+    )
+    print("-" * 80)
     print(f"{'Beam':<5} {'LenPen':<8} {'RepPen':<8} {'NoRep':<6} | {'BLEU':<8}")
-    print("-" * 60)
+    print("-" * 80)
 
     best_score = -1
     best_cfg = None
+    results = []
 
     for cfg in combinations:
         score = evaluate_config(model, vision_encoder, eval_data, cfg)
+        results.append((cfg, score))
 
         print(
             f"{cfg['beam_width']:<5} {cfg['length_penalty']:<8.1f} {cfg['repetition_penalty']:<8.1f} {cfg['no_repeat_ngram_size']:<6} | {score:.4f}"
@@ -306,9 +395,10 @@ def main():
             best_score = score
             best_cfg = cfg
 
-    print("-" * 60)
+    print("-" * 80)
     print(f"🏆 Best Configuration: {best_cfg}")
     print(f"📈 Best BLEU: {best_score:.4f}")
+    summarize_hparam_impacts(results, keys)
 
 
 if __name__ == "__main__":

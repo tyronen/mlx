@@ -470,14 +470,14 @@ def main():
 
         c3, c4 = st.columns(2)
         top_k = c3.slider("Top-k (0 = off)", 0, 200, 0, 1)
-        repetition_penalty = c4.slider("Repetition penalty", 1.0, 2.0, 1.5, 0.05)
+        repetition_penalty = c4.slider("Repetition penalty", 1.0, 2.0, 1.0, 0.05)
 
         c5, c6 = st.columns(2)
         no_repeat_ngram_size = c5.slider("No-repeat n-gram", 0, 5, 4, 1)
         max_length = c6.slider("Max length", 8, 64, 24, 1)
 
         c7, c8 = st.columns(2)
-        beam_width = c7.slider("Beam width", 1, 8, 1, 1)
+        beam_width = c7.slider("Beam width", 1, 8, 3, 1)
         length_penalty = c8.slider("Length penalty", 0.0, 1.5, 0.6, 0.05)
 
         if beam_width > 1:
