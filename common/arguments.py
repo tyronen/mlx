@@ -1,4 +1,5 @@
 import argparse
+import logging
 
 
 def get_parser(description):
@@ -26,5 +27,10 @@ def get_parser(description):
         type=int,
         default=64,
         help="Number of vision tokens to keep per image (0 keeps all patches)",
+    )
+    parser.add_argument(
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        help="Compile the model with torch.compile",
     )
     return parser

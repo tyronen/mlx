@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 import wandb
+from transformers import get_cosine_schedule_with_warmup
 import torch._dynamo
 import torch._inductor.config
 from tqdm import tqdm
@@ -21,7 +22,7 @@ parser.add_argument(
 parser.add_argument(
     "--accumulation_steps",
     type=int,
-    default=8,
+    default=4,
     help="Gradient accumulation steps (controls effective batch size)",
 )
 parser.add_argument(
@@ -35,11 +36,6 @@ parser.add_argument(
     action="store_true",
     help="Profile timing of the model",
 )
-parser.add_argument(
-    "--use_mlp_projector",
-    action="store_true",
-    help="Use MLP for image projection instead of Linear",
-)
 args = parser.parse_args()
 
 
@@ -50,7 +46,7 @@ hyperparameters = {
     "ffn_dim": 1536,
     "num_heads": 8,
     "num_decoders": 4,
-    "learning_rate": 1e-4,
+    "learning_rate": 2e-4,
     "epochs": int(args.epochs),
     "dropout": 0.3,
     "patience": 3,
@@ -60,7 +56,6 @@ hyperparameters = {
     "use_official_captions": args.official_captions,
     "finetune_from": args.finetune_from,
     "max_vision_tokens": args.max_vision_tokens,
-    "use_mlp_projector": args.use_mlp_projector,
 }
 
 sweep_config = {
@@ -86,7 +81,6 @@ sweep_config = {
         "use_official_captions": {"values": [args.official_captions]},
         "finetune_from": {"values": [args.finetune_from]},
         "max_vision_tokens": {"values": [args.max_vision_tokens]},
-        "use_mlp_projector": {"values": [args.use_mlp_projector]},
     },
 }
 
@@ -156,7 +150,7 @@ def backward_micro_batches(
 ):
     input_ids = batch["input_ids"]
     images = batch["images"]
-    total = input_ids.size(0)
+    total = input_ids.size(0) // 4
     chunk_size = resolve_chunk_size(total, micro_batch_size)
 
     # Pre-calculate fractions
@@ -252,6 +246,9 @@ def autotune_batching(
             )
             torch.cuda.empty_cache()
             training_dataloader, _, _ = build_dataloaders()
+            # If we reduced batch size, we should also reset micro batch size to force re-evaluation
+            if "micro_batch_size" in config:
+                config.pop("micro_batch_size", None)
             continue
 
         try:
@@ -305,6 +302,8 @@ def autotune_batching(
                     f"OOM persists with micro batch size {chunk_size}. Reducing training batch size to {config['batch_size']}."
                 )
                 training_dataloader, _, _ = build_dataloaders()
+                continue
+
             else:
                 config["micro_batch_size"] = new_micro
                 logging.warning(
@@ -412,6 +411,8 @@ def main():
 
 def run_training(config, **_):
     utils.setup_logging()
+    logging.info(f"Arguments: {args}")
+    logging.info(f"Config: {config}")
     device = utils.get_device()
     if device.type != "cuda" or not torch.cuda.is_available():
         logging.warning("Running on non-CUDA device. This is not supported.")
@@ -534,7 +535,6 @@ def run_training(config, **_):
         num_heads=config["num_heads"],
         num_decoders=config["num_decoders"],
         dropout=config["dropout"],
-        use_mlp_projector=config.get("use_mlp_projector", False),
     ).to(device)
 
     # If fine-tuning from a checkpoint, load it now
@@ -616,18 +616,23 @@ def run_training(config, **_):
     torch._inductor.config.triton.cudagraph_trees = False  # type: ignore
 
     # Actually compile the model
-    logging.info(
-        "Compiling model with torch.compile(mode='max-autotune-no-cudagraphs')..."
-    )
-    model = torch.compile(model, mode="max-autotune-no-cudagraphs")
+    if args.compile:
+        logging.info(
+            "Compiling model with torch.compile(mode='max-autotune-no-cudagraphs')..."
+        )
+        model = torch.compile(model, mode="max-autotune-no-cudagraphs")
+    else:
+        logging.info("Skipping torch.compile (running in eager mode)")
 
     optimizer = optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=config["learning_rate"],
         weight_decay=config["weight_decay"],
     )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=total_steps, eta_min=1e-6
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=int(0.1 * total_steps),
+        num_training_steps=total_steps,
     )
     best_val_loss = float("inf")
     patience_counter = 0
@@ -665,16 +670,43 @@ def run_training(config, **_):
             prepare_time += prepare_end - prepare_start
             maybe_synchronize()
             compute_start = time.perf_counter()
-            batch_loss_value = backward_micro_batches(
-                prepared_batch,
-                config.get("micro_batch_size", 0),
-                model,
-                pad_token_id,
-                config["label_smoothing"],
-                maybe_autocast,
-                scaler,
-                config["accumulation_steps"],
-            )
+            # Retry loop so we can shrink micro_batch_size on runtime OOMs.
+            while True:
+                try:
+                    batch_loss_value = backward_micro_batches(
+                        prepared_batch,
+                        config.get("micro_batch_size", 0),
+                        model,
+                        pad_token_id,
+                        config["label_smoothing"],
+                        maybe_autocast,
+                        scaler,
+                        config["accumulation_steps"],
+                    )
+                    break
+                except RuntimeError as err:
+                    if not is_cuda_oom_error(err):
+                        raise
+                    # Free any partial grads and shrink micro batch size before retrying.
+                    model.zero_grad(set_to_none=True)
+                    torch.cuda.empty_cache()
+                    current_micro = config.get("micro_batch_size", 0) or prepared_batch[
+                        "input_ids"
+                    ].size(0)
+                    if current_micro <= 1:
+                        raise RuntimeError(
+                            "CUDA OOM during training even with micro_batch_size=1. "
+                            "Try lowering --max_batch_size."
+                        ) from err
+                    new_micro = max(1, current_micro // 2)
+                    if new_micro == current_micro:
+                        new_micro = max(1, current_micro - 1)
+                    config["micro_batch_size"] = new_micro
+                    logging.warning(
+                        "OOM during training step. Reducing micro_batch_size to %s and retrying batch.",
+                        new_micro,
+                    )
+                    continue
             maybe_synchronize()
             compute_end = time.perf_counter()
             compute_time += compute_end - compute_start
@@ -794,7 +826,6 @@ def run_training(config, **_):
                     "num_heads": config["num_heads"],
                     "num_decoders": config["num_decoders"],
                     "dropout": config["dropout"],
-                    "use_mlp_projector": config.get("use_mlp_projector", False),
                 },
                 model_file,
             )

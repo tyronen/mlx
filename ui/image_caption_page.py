@@ -43,7 +43,6 @@ def load_model(model_type="base"):
         num_heads=checkpoint["num_heads"],
         num_decoders=checkpoint["num_decoders"],
         dropout=checkpoint["dropout"],
-        use_mlp_projector=checkpoint.get("use_mlp_projector", False),
     )
     model.load_state_dict(checkpoint["state_dict"])
     model.to(DEVICE)
@@ -101,10 +100,15 @@ def refine_caption_grammar(tokenizer, model, draft_caption):
 @st.cache_resource
 def load_models(model_type="base"):
     """Load the trained model"""
-    encoder = image_caption.ImageEncoder()
+    encoder = image_caption.ImageEncoder(max_vision_tokens=257)
     coco_model = load_model(model_type=model_type)
     st.success(f"Loaded {model_type} model successfully!")
     return encoder, coco_model
+
+
+@st.cache_resource
+def load_clip_scorer():
+    return image_caption_utils.CLIPScorer()
 
 
 @st.cache_data(show_spinner=False)
@@ -251,11 +255,10 @@ def _beam_search_decode(
     no_repeat_ngram_size,
     beam_width,
     length_penalty,
+    return_all=False,
 ):
     eos = model.tokenizer.eos_token_id
-    # Use prompt to guide beam search too
-    prompt_tokens = model.tokenizer.encode("A photo of", add_special_tokens=False)
-    start_seq = [model.tokenizer.bos_token_id] + prompt_tokens
+    start_seq = [model.tokenizer.bos_token_id]
     beams = [(start_seq, 0.0, False)]
     completed = []
 
@@ -309,10 +312,12 @@ def _beam_search_decode(
             ),
             reverse=True,
         )
-        return completed[0][0]
+        return completed if return_all else completed[0][0]
     if beams:
+        if return_all:
+            return [(tokens, score) for tokens, score, _ in beams]
         return beams[0][0]
-    return [model.tokenizer.bos_token_id]
+    return [] if return_all else [model.tokenizer.bos_token_id]
 
 
 def _capitalize_sentences(text):
@@ -348,6 +353,10 @@ def generate_caption(
     no_repeat_ngram_size,
     beam_width,
     length_penalty,
+    clip_rerank=False,
+    clip_scorer=None,
+    clip_top_k=3,
+    pixel_values=None,
 ):
     """Generate caption for the image"""
     try:
@@ -355,6 +364,28 @@ def generate_caption(
         image_features = model.image_projection(image_features)  # [1, model_dim]
 
         if beam_width and beam_width > 1:
+            if clip_rerank and clip_scorer and pixel_values is not None:
+                candidates = _beam_search_decode(
+                    image_features,
+                    model,
+                    max_length,
+                    repetition_penalty,
+                    no_repeat_ngram_size,
+                    beam_width,
+                    length_penalty,
+                    return_all=True,
+                )
+                if candidates:
+                    top_candidates = candidates[: max(1, clip_top_k)]
+                    captions = [
+                        model.tokenizer.decode(toks[1:], skip_special_tokens=True)
+                        for toks, _ in top_candidates
+                    ]
+                    scores = clip_scorer.score(pixel_values, captions)
+                    best_idx = max(range(len(scores)), key=lambda j: scores[j])
+                    caption = captions[best_idx]
+                    return _capitalize_sentences(caption)
+
             token_ids = _beam_search_decode(
                 image_features,
                 model,
@@ -473,17 +504,27 @@ def main():
         repetition_penalty = c4.slider("Repetition penalty", 1.0, 2.0, 1.0, 0.05)
 
         c5, c6 = st.columns(2)
-        no_repeat_ngram_size = c5.slider("No-repeat n-gram", 0, 5, 4, 1)
-        max_length = c6.slider("Max length", 8, 64, 24, 1)
+        no_repeat_ngram_size = c5.slider("No-repeat n-gram", 0, 5, 2, 1)
+        max_length = c6.slider("Max length", 8, 64, 12, 1)
 
         c7, c8 = st.columns(2)
         beam_width = c7.slider("Beam width", 1, 8, 3, 1)
-        length_penalty = c8.slider("Length penalty", 0.0, 1.5, 0.6, 0.05)
+        length_penalty = c8.slider("Length penalty", 0.0, 1.5, 1.0, 0.05)
 
         if beam_width > 1:
             st.caption("Beam search active (overrides temp/top-k).")
         else:
             st.caption("Sampling mode active.")
+
+        clip_rerank = False
+        clip_top_k = 3
+        if beam_width > 1:
+            clip_rerank = st.checkbox(
+                "CLIP rerank beams (L/14)",
+                value=True,
+                help="Scores top beams with CLIP and keeps the most image-aligned caption.",
+            )
+            clip_top_k = st.slider("Beams to score", 1, min(beam_width, 5), 3, 1)
 
         st.divider()
         enable_grammar_refinement = st.checkbox(
@@ -515,6 +556,9 @@ def main():
                 # Preprocess image
                 inputs = encoder.processor(images=image, return_tensors="pt")
                 pixel_values = inputs.pixel_values
+                clip_scorer = None
+                if beam_width > 1 and clip_rerank:
+                    clip_scorer = load_clip_scorer()
                 # Run encoder
                 image_features = encoder(pixel_values)
 
@@ -529,6 +573,10 @@ def main():
                     no_repeat_ngram_size,
                     beam_width,
                     length_penalty,
+                    clip_rerank=clip_rerank and clip_scorer is not None,
+                    clip_scorer=clip_scorer,
+                    clip_top_k=clip_top_k,
+                    pixel_values=pixel_values,
                 )
 
                 if enable_grammar_refinement:

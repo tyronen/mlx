@@ -2,12 +2,13 @@ import kagglehub
 import torch
 import json
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoProcessor, CLIPModel
 import csv
 import os
 import numpy as np
 from functools import lru_cache
 from typing import List, Tuple
+import torch.nn.functional as F
 
 FLICKR_FEATURES_PATH = "data/flickr_features.pt"
 COCO_FEATURES_PATH = "data/coco_features.pt"
@@ -259,3 +260,38 @@ class CustomDataLoader(DataLoader):
             persistent_workers=(num_workers > 0),
             collate_fn=collate_fn,
         )
+
+
+class CLIPScorer:
+    """
+    Lightweight CLIP-L/14 scorer to rank captions against an image.
+    Intended for small beam lists (e.g., top 2-5).
+    """
+
+    def __init__(self, model_id: str = "openai/clip-vit-large-patch14"):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = CLIPModel.from_pretrained(model_id).to(self.device)  # type: ignore[misc]
+        self.model.eval()
+        self.processor = AutoProcessor.from_pretrained(model_id, use_fast=False)
+
+    @torch.no_grad()
+    def score(self, pixel_values: torch.Tensor, captions: List[str]) -> List[float]:
+        """
+        Args:
+            pixel_values: [1, 3, 224, 224] tensor on device
+            captions: list of candidate strings
+        Returns:
+            list of cosine similarity scores
+        """
+        pixel_values = pixel_values.to(self.device, dtype=torch.float32)
+        text_inputs = self.processor(
+            text=captions, padding=True, truncation=True, return_tensors="pt"
+        ).to(self.device)
+        image_features = self.model.get_image_features(
+            pixel_values=pixel_values  # type: ignore[arg-type]
+        )
+        text_features = self.model.get_text_features(**text_inputs)
+        image_features = F.normalize(image_features, dim=-1)
+        text_features = F.normalize(text_features, dim=-1)
+        sims = (image_features @ text_features.T).squeeze(0)
+        return sims.tolist()

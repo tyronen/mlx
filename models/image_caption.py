@@ -292,7 +292,6 @@ class CombinedTransformer(nn.Module):
         num_heads: int,
         num_decoders: int,
         dropout: float,
-        use_mlp_projector: bool = False,
     ):
         super().__init__()
 
@@ -333,10 +332,7 @@ class CombinedTransformer(nn.Module):
         self.token_proj = nn.Identity()
         img_proj_out = base.config.hidden_size
 
-        if use_mlp_projector:
-            self.image_projection = MLPProjector(1024, img_proj_out)
-        else:
-            self.image_projection = nn.Linear(1024, img_proj_out)
+        self.image_projection = MLPProjector(1024, img_proj_out)
 
     def embed_input_ids(self, input_ids):
         # Create embeddings for the tokens generated so far

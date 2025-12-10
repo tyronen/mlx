@@ -54,3 +54,4 @@ export LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/nvjitlink/
 
 export TORCHINDUCTOR_CACHE_DIR=/tmp/.torchinductor
 export TRITON_CACHE_DIR=/tmp/.triton
+export TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_BACKENDS=ATEN

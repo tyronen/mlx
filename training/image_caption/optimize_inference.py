@@ -9,6 +9,7 @@ import os
 import argparse
 from models import image_caption
 from common import utils
+from models import image_caption_utils
 
 # Setup
 utils.setup_logging()
@@ -72,11 +73,10 @@ def _beam_search_decode(
     no_repeat_ngram_size,
     beam_width,
     length_penalty,
+    return_all=False,
 ):
     eos = model.tokenizer.eos_token_id
-    # Use prompt to guide beam search too
-    prompt_tokens = model.tokenizer.encode("A photo of", add_special_tokens=False)
-    start_seq = [model.tokenizer.bos_token_id] + prompt_tokens
+    start_seq = [model.tokenizer.bos_token_id]
     beams = [(start_seq, 0.0, False)]
     completed = []
 
@@ -128,39 +128,25 @@ def _beam_search_decode(
             ),
             reverse=True,
         )
-        return completed[0][0]
+        return completed if return_all else completed[0][0]
     if beams:
+        if return_all:
+            return [(tokens, score) for tokens, score, _ in beams]
         return beams[0][0]
-    return [model.tokenizer.bos_token_id]
+    return [] if return_all else [model.tokenizer.bos_token_id]
 
 
 def generate_caption_inference(model, image_features, config):
-    # Unpack config
-    beam_width = config.get("beam_width", 1)
-
-    if beam_width > 1:
-        token_ids = _beam_search_decode(
-            image_features,
-            model,
-            max_length=config.get("max_length", 32),
-            repetition_penalty=config.get("repetition_penalty", 1.0),
-            no_repeat_ngram_size=config.get("no_repeat_ngram_size", 0),
-            beam_width=beam_width,
-            length_penalty=config.get("length_penalty", 1.0),
-        )
-        return model.tokenizer.decode(token_ids[1:], skip_special_tokens=True)
-    else:
-        # Simple greedy/sampling path (simplified for this sweep as we care mostly about beam)
-        token_ids = _beam_search_decode(
-            image_features,
-            model,
-            config.get("max_length", 32),
-            config.get("repetition_penalty", 1.0),
-            config.get("no_repeat_ngram_size", 0),
-            1,
-            config.get("length_penalty", 1.0),
-        )
-        return model.tokenizer.decode(token_ids[1:], skip_special_tokens=True)
+    token_ids = _beam_search_decode(
+        image_features,
+        model,
+        max_length=config["max_length"],
+        repetition_penalty=config["repetition_penalty"],
+        no_repeat_ngram_size=config["no_repeat_ngram_size"],
+        beam_width=config["beam_width"],
+        length_penalty=config["length_penalty"],
+    )
+    return model.tokenizer.decode(token_ids[1:], skip_special_tokens=True)
 
 
 # --- Data Preparation ---
@@ -202,7 +188,6 @@ def load_trained_model(model_path):
         num_heads=checkpoint["num_heads"],
         num_decoders=checkpoint["num_decoders"],
         dropout=checkpoint["dropout"],
-        use_mlp_projector=checkpoint.get("use_mlp_projector", False),
     )
     model.load_state_dict(checkpoint["state_dict"])
     model.to(DEVICE)
@@ -210,7 +195,15 @@ def load_trained_model(model_path):
     return model
 
 
-def evaluate_config(model, vision_encoder, data, config):
+def evaluate_config(
+    model,
+    vision_encoder,
+    data,
+    config,
+    clip_scorer=None,
+    clip_top_k=3,
+    use_clip_rerank=False,
+):
     refs = []
     preds = []
 
@@ -227,9 +220,35 @@ def evaluate_config(model, vision_encoder, data, config):
             with torch.no_grad():
                 # Encode image [B, 257, 1024]
                 img_feat = vision_encoder(pixel_values)
-                # Project and generate
+                # Project
                 proj_feats = model.image_projection(img_feat)
-                pred = generate_caption_inference(model, proj_feats, config)
+
+                if use_clip_rerank and config.get("beam_width", 1) > 1 and clip_scorer:
+                    # Collect beam candidates then rerank with CLIP similarity
+                    candidates = _beam_search_decode(
+                        proj_feats,
+                        model,
+                        max_length=config.get("max_length", 32),
+                        repetition_penalty=config.get("repetition_penalty", 1.0),
+                        no_repeat_ngram_size=config.get("no_repeat_ngram_size", 0),
+                        beam_width=config.get("beam_width", 1),
+                        length_penalty=config.get("length_penalty", 1.0),
+                        return_all=True,
+                    )
+                    if not candidates:
+                        pred = generate_caption_inference(model, proj_feats, config)
+                    else:
+                        # Keep top-N candidates for scoring
+                        top_candidates = candidates[: max(1, clip_top_k)]
+                        captions = [
+                            model.tokenizer.decode(toks[1:], skip_special_tokens=True)
+                            for toks, _ in top_candidates
+                        ]
+                        scores = clip_scorer.score(pixel_values, captions)
+                        best_idx = max(range(len(scores)), key=lambda j: scores[j])
+                        pred = captions[best_idx]
+                else:
+                    pred = generate_caption_inference(model, proj_feats, config)
         except Exception as e:
             print(f"Error processing {image_path}: {e}")
             pred = ""
@@ -340,6 +359,24 @@ def get_args():
         default=[0],
         help="No repeat ngram sizes to sweep",
     )
+    parser.add_argument(
+        "--max_length",
+        type=int,
+        nargs="+",
+        default=[32],
+        help="Maximum length of the generated caption",
+    )
+    parser.add_argument(
+        "--clip_rerank",
+        action="store_true",
+        help="Enable CLIP-based reranking of beam outputs (uses CLIP-L/14)",
+    )
+    parser.add_argument(
+        "--clip_top_k",
+        type=int,
+        default=3,
+        help="Number of top beams to score with CLIP when reranking",
+    )
     return parser.parse_args()
 
 
@@ -358,6 +395,8 @@ def main():
     vision_encoder = image_caption.ImageEncoder().to(DEVICE)
     vision_encoder.eval()
 
+    clip_scorer = image_caption_utils.CLIPScorer() if args.clip_rerank else None
+
     # 2. Prepare Data
     eval_data = get_val_data(limit=args.limit)
 
@@ -367,6 +406,7 @@ def main():
         "length_penalty": args.length_penalty,
         "repetition_penalty": args.repetition_penalty,
         "no_repeat_ngram_size": args.no_repeat_ngram_size,
+        "max_length": args.max_length,
     }
 
     keys, values = zip(*grid.items())
@@ -376,7 +416,9 @@ def main():
         f"Starting sweep over {len(combinations)} configurations with limit={args.limit}..."
     )
     print("-" * 80)
-    print(f"{'Beam':<5} {'LenPen':<8} {'RepPen':<8} {'NoRep':<6} | {'BLEU':<8}")
+    print(
+        f"{'Beam':<5} {'LenPen':<8} {'RepPen':<8} {'NoRep':<6} {'MaxLen':<6} | {'BLEU':<8}"
+    )
     print("-" * 80)
 
     best_score = -1
@@ -384,11 +426,19 @@ def main():
     results = []
 
     for cfg in combinations:
-        score = evaluate_config(model, vision_encoder, eval_data, cfg)
+        score = evaluate_config(
+            model,
+            vision_encoder,
+            eval_data,
+            cfg,
+            clip_scorer=clip_scorer,
+            clip_top_k=args.clip_top_k,
+            use_clip_rerank=args.clip_rerank,
+        )
         results.append((cfg, score))
 
         print(
-            f"{cfg['beam_width']:<5} {cfg['length_penalty']:<8.1f} {cfg['repetition_penalty']:<8.1f} {cfg['no_repeat_ngram_size']:<6} | {score:.4f}"
+            f"{cfg['beam_width']:<5} {cfg['length_penalty']:<8.1f} {cfg['repetition_penalty']:<8.1f} {cfg['no_repeat_ngram_size']:<6} {cfg['max_length']:<6} | {score:.4f}"
         )
 
         if score > best_score:
