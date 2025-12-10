@@ -1,5 +1,5 @@
 import json
-import os
+import pandas as pd
 import random
 import re
 import tempfile
@@ -448,9 +448,7 @@ def generate_caption(
 def official_caption(target):
     data = json.load(open("data/annotations/captions_train2017.json"))
     by_file_name = {img["file_name"]: img["id"] for img in data["images"]}
-    st.write(target)
     image_id = by_file_name.get(target)
-    st.write(image_id)
     captions = {}
     for ann in data["annotations"]:
         captions.setdefault(ann["image_id"], []).append(ann["caption"])
@@ -476,11 +474,11 @@ def main():
 
     model_choice = st.sidebar.radio(
         "Model Version",
-        ["Style Fine-tuned", "Foundation (Official)"],
+        ["Synthetic Fine-tuned", "Foundation (Official)"],
         index=0,
-        help="Switch between the style-adapted model and the foundation model trained on official captions.",
+        help="Switch between the style-adapted model, trained on the official captions and synthetic ones we generated and the foundation model trained only on official captions.",
     )
-    model_type = "base" if model_choice == "Style Fine-tuned" else "official"
+    model_type = "base" if model_choice == "Synthetic Fine-tuned" else "official"
 
     encoder, coco_model = load_models(model_type=model_type)
 
@@ -489,8 +487,8 @@ def main():
         st.session_state.coco_test_path = ""
     if "coco_caption" not in st.session_state:
         st.session_state.coco_caption = ""
-    if "correct_caption" not in st.session_state:
-        st.session_state.correct_caption = []
+    if "ref_caption" not in st.session_state:
+        st.session_state.ref_caption = []
 
     # Settings form
     with st.sidebar.form("generation_settings"):
@@ -540,19 +538,22 @@ def main():
         st.session_state.coco_test_path = str(random.choice(coco_files))
         # Clear previous captions when image changes
         st.session_state.coco_caption = ""
-        st.session_state.correct_caption = []
+        st.session_state.ref_captions = []
         # We want to trigger generation immediately for a new image
         submitted = True
 
     image_path = st.session_state.coco_test_path
     if image_path:
         image = Image.open(image_path).convert("RGB")
-        st.write(f"Image path: {Path(image_path).name} (from {coco_dir})")
+        # remove leading zeros from image path
+        image_id = Path(image_path).name.lstrip("0").replace(".jpg", "")
+        image_url = f"https://cocodataset.org/#explore?id={image_id}"
+        st.html(f"Image: <a href='{image_url}' target='_blank'>{image_id}</a>")
         st.image(image)
 
         # Only generate if button pressed or new image selected
         if submitted or (st.session_state.coco_caption == "" and image_path):
-            with st.spinner("Generating captions..."), torch.no_grad():
+            with st.spinner("Generating caption..."), torch.no_grad():
                 # Preprocess image
                 inputs = encoder.processor(images=image, return_tensors="pt")
                 pixel_values = inputs.pixel_values
@@ -586,14 +587,21 @@ def main():
                             cleaner_tokenizer, cleaner_model, coco_caption
                         )
 
-                correct_caption = official_caption(image_path.split("/")[-1])
+                ref_captions = official_caption(image_path.split("/")[-1])
                 st.session_state.coco_caption = coco_caption
-                st.session_state.correct_caption = correct_caption
+                st.session_state.ref_captions = ref_captions
 
         if st.session_state.coco_caption:
-            st.markdown(f"**Caption:** {st.session_state.coco_caption}")
-        if st.session_state.correct_caption:
-            st.markdown(f"**Correct caption:** {st.session_state.correct_caption}")
+            st.markdown(f"**Generated caption**")
+            st.text(st.session_state.coco_caption)
+        if st.session_state.ref_captions:
+            st.dataframe(
+                pd.DataFrame(
+                    st.session_state.ref_captions,
+                    columns=["Reference Captions (from humans)"],  # type: ignore
+                ),
+                hide_index=True,
+            )
     else:
         st.info("👆 Click “Random test image” to caption a sample.")
 

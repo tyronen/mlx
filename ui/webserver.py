@@ -1,4 +1,16 @@
+import sys
+import types
+
+import torch
 import streamlit as st
+
+# Streamlit's module watcher walks __path__ and torch.classes raises a RuntimeError.
+# Provide a harmless dummy module so the watcher doesn't trip over torch.classes.
+if not isinstance(getattr(torch, "classes", None), types.ModuleType):
+    _dummy_classes = types.ModuleType("torch.classes")
+    _dummy_classes.__path__ = []  # satisfy __path__ lookups
+    sys.modules["torch.classes"] = _dummy_classes
+    torch.classes = _dummy_classes
 
 simple_mnist_page = st.Page(
     "simple_mnist_page.py",

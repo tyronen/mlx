@@ -20,7 +20,7 @@ done
 echo "✅ Redis is ready, starting Streamlit..."
 
 # Start Streamlit locally (not in Docker)
-streamlit run ui/webserver.py --server.port=$PORT --server.address=0.0.0.0 --server.fileWatcherType=poll
+streamlit run ui/webserver.py --server.port=$PORT --server.address=0.0.0.0 --server.fileWatcherType=poll  --server.folderWatchBlacklist="torch"
 
 # Cleanup on exit
 echo "🛑 Shutting down Redis..."
